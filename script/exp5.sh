@@ -1,3 +1,3 @@
 #!/bin/bash
 
-python train.py --dataset_name nosinglebond --use_linedistance --tag exp5
+python train.py --use_distance --use_equality --use_isopen --use_nodefeats --tag exp5
