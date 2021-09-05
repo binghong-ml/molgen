@@ -84,3 +84,11 @@ class ZincYesSingleBondDataset(ZincNoSingleBondDataset):
         mol = Chem.MolFromSmiles(smiles)
         smiles = Chem.MolToSmiles(mol, canonical=False, doRandom=True, isomericSmiles=False, allBondsExplicit=True)
         return tokenize(smiles)
+
+class MosesNoSingleBondDataset(ZincNoSingleBondDataset):
+    raw_dir = "../resource/data/moses/raw"
+    processed_dir = "../resource/data/moses/nosinglebond"
+
+class MosesYesSingleBondDataset(ZincYesSingleBondDataset):
+    raw_dir = "../resource/data/moses/raw"
+    processed_dir = "../resource/data/moses/yessinglebond"

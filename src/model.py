@@ -165,6 +165,10 @@ class BaseGenerator(nn.Module):
             features = SmilesState.collate([state.featurize(self.tokenizer) for state in states])
             features = [tsr.to(device) for tsr in features]
             features, ended = features[:-1], features[-1]
+
+            if ended.all().item():
+                break
+
             #
             logits = self(*features)[:, -1]
             distribution = torch.distributions.Categorical(logits=logits)

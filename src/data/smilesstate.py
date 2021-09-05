@@ -123,8 +123,14 @@ class SmilesState(object):
         if tokentype in [TokenType.ATOM, TokenType.BOND]:
             self.segments[-1].append(len(self.segments[-1]))
 
-        elif tokentype in [TokenType.BRANCH_START, TokenType.BRANCH_END, TokenType.RING_NUM]:
+        elif tokentype in [TokenType.BRANCH_START, TokenType.BRANCH_END]:
             self.segments.append([0])
+        
+        elif tokentype == TokenType.RING_NUM:
+            if token in self.open_ring_nums:
+                self.segments[-1].append(len(self.segments[-1]))
+            else:
+                self.segments.append([0])
 
         elif tokentype == TokenType.SPECIAL:
             if token == "<bos>":

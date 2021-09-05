@@ -8,7 +8,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from neptune.new.integrations.pytorch_lightning import NeptuneLogger
 
 from model import BaseGenerator
-from data.dataset import ZincNoSingleBondDataset, ZincYesSingleBondDataset
+from data.dataset import ZincNoSingleBondDataset, ZincYesSingleBondDataset, MosesNoSingleBondDataset, MosesYesSingleBondDataset
 from data.smilesstate import SmilesState
 from util import compute_sequence_cross_entropy, canonicalize
 
@@ -20,12 +20,17 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         self.save_hyperparameters(hparams)
         self.setup_datasets(hparams)
         self.setup_model(hparams)
+        self.sanity_checked = False
 
     def setup_datasets(self, hparams):
-        if hparams.dataset_name == "nosinglebond":
+        if hparams.dataset_name == "zinc_nosinglebond":
             dataset_cls = ZincNoSingleBondDataset
-        elif hparams.dataset_name == "yessinglebond":
+        elif hparams.dataset_name == "zinc_yessinglebond":
             dataset_cls = ZincYesSingleBondDataset
+        elif hparams.dataset_name == "moses_nosinglebond":
+            dataset_cls = MosesNoSingleBondDataset
+        elif hparams.dataset_name == "moses_yessinglebond":
+            dataset_cls = MosesYesSingleBondDataset
 
         self.train_dataset = dataset_cls("train")
         self.val_dataset = dataset_cls("valid")
@@ -68,7 +73,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         )
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.hparams.lr)
         return [optimizer]
 
     ### Main steps
@@ -121,34 +126,42 @@ class BaseGeneratorLightningModule(pl.LightningModule):
     def validation_epoch_end(self, outputs):
         statistics = dict()
 
-        with torch.no_grad():
-            states = self.model.decode(
-                self.hparams.sample_batch_size if self.current_epoch > 0 else 2, 
-                max_len=120 if self.current_epoch > 0 else 10, 
-                device=self.device
-                )
+        num_samples = self.hparams.num_samples if self.sanity_checked else 2
+        maybe_smiles_list = []
+        while len(maybe_smiles_list) < num_samples: 
+            with torch.no_grad():
+                states = self.model.decode(
+                    self.hparams.sample_batch_size if self.sanity_checked else 2, 
+                    max_len=120 if self.sanity_checked else 10, 
+                    device=self.device
+                    )
 
-        maybe_smiles_list = [state.get_smiles() for state in states]
+            maybe_smiles_list += [state.get_smiles() for state in states]
+        
+        maybe_smiles_list = maybe_smiles_list[:num_samples]
         smiles_list = []
         for maybe_smiles in maybe_smiles_list:
+            self.logger.experiment["smiles"].log(f"{self.current_epoch}, {maybe_smiles}")
+            
             smiles = canonicalize(maybe_smiles)
             if smiles is None:
-                if self.current_epoch > 0:
-                    self.logger.experiment["invalid_smiles"].log(maybe_smiles)
+                self.logger.experiment["invalid_smiles"].log(f"{self.current_epoch}, {maybe_smiles}")
             else:
                 smiles_list.append(smiles)
 
         unique_smiles_list = list(set(smiles_list))
 
         statistics["sample/valid"] = float(len(smiles_list)) / self.hparams.sample_batch_size
-        statistics["sample/unique"] = float(len(unique_smiles_list)) / self.hparams.sample_batch_size
+        statistics["sample/unique"] = float(len(unique_smiles_list)) / len(smiles_list) if len(smiles_list) > 0 else 0.0
 
         for key, val in statistics.items():
             self.log(key, val, on_step=False, on_epoch=True, logger=True)
 
+        self.sanity_checked = True
+
     @staticmethod
     def add_args(parser):
-        parser.add_argument("--dataset_name", type=str, default="yessinglebond")
+        parser.add_argument("--dataset_name", type=str, default="moses_yessinglebond")
 
         parser.add_argument("--num_encoder_layers", type=int, default=6)
         parser.add_argument("--emb_size", type=int, default=1024)
@@ -166,6 +179,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--batch_size", type=int, default=256)
         parser.add_argument("--num_workers", type=int, default=8)
 
+        parser.add_argument("--num_samples", type=int, default=1024)
         parser.add_argument("--sample_batch_size", type=int, default=256)
 
         return parser
