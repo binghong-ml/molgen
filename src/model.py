@@ -119,7 +119,7 @@ class BaseGenerator(nn.Module):
             
             out += self.tokentype_embedding_layer(tokentype_sequences)
             out += self.degree_embedding_layer(degree_sequences)
-            out += self.numH_embedding_layer(degree_sequences)           
+            out += self.numH_embedding_layer(numH_sequences)           
         
         out = self.input_dropout(out)
 
