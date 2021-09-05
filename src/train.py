@@ -185,18 +185,18 @@ if __name__ == "__main__":
     if hparams.load_checkpoint_path != "":
         model.load_from_checkpoint(hparams.load_checkpoint_path)
 
-    #neptune_logger = NeptuneLogger(project="sungsahn0215/molgen", close_after_fit=False)
-    #neptune_logger.run["params"] = vars(hparams)
-    #neptune_logger.run["sys/tags"].add(hparams.tag.split("_"))
-    #checkpoint_callback = ModelCheckpoint(
-    #    dirpath=os.path.join("../resource/checkpoint/", hparams.tag), monitor="validation/loss/total", mode="min",
-    #)
+    neptune_logger = NeptuneLogger(project="sungsahn0215/molgen", close_after_fit=False)
+    neptune_logger.run["params"] = vars(hparams)
+    neptune_logger.run["sys/tags"].add(hparams.tag.split("_"))
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=os.path.join("../resource/checkpoint/", hparams.tag), monitor="validation/loss/total", mode="min",
+    )
     trainer = pl.Trainer(
         gpus=1,
-        #logger=neptune_logger,
+        logger=neptune_logger,
         default_root_dir="../resource/log/",
         max_epochs=hparams.max_epochs,
-        #callbacks=[checkpoint_callback],
+        callbacks=[checkpoint_callback],
         gradient_clip_val=hparams.gradient_clip_val,
     )
     trainer.fit(model)
