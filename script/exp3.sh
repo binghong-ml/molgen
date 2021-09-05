@@ -1,3 +1,3 @@
 #!/bin/bash
 
-python train.py --use_distance --use_equality --use_isopen --tag exp3
+python train.py --use_distance --use_equality --tag exp3

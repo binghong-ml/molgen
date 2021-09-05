@@ -1,3 +1,3 @@
 #!/bin/bash
 
-python train.py --use_distance --tag exp1
+python train.py --use_linedistance --tag exp1

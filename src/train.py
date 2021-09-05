@@ -169,10 +169,8 @@ if __name__ == "__main__":
     checkpoint_callback = ModelCheckpoint(
         dirpath=os.path.join("../resource/checkpoint/", hparams.tag),
         monitor="validation/loss/total",
-        filename="best",
         mode="min"
         )
-    
     trainer = pl.Trainer(
         gpus=1,
         logger=neptune_logger,
