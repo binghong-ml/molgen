@@ -84,39 +84,14 @@ class SmilesState(object):
             self.eosidx = tokenidx if self.eosidx is None else self.eosidx            
 
         # Segmentation logic
-        if tokentype == TokenType.BRANCH_START:
-            if len(self.segments[-1]) == 0:
-                if verbose > 0:
-                    print("Invalid grammar: BRANCH_START at beginning of segment")
-                
-                self.segments[-1].append(len(self.segments[-1]))
-            else:
-                self.segments[-1].append(len(self.segments[-1]) - 1)
-            
-        elif tokentype == TokenType.BRANCH_END:
-            self.segments.append([0])
-
-        elif tokentype == TokenType.RING_NUM:
-            if token not in self.open_ring_nums:
-                if len(self.segments[-1]) == 0:
-                    if verbose > 0:
-                        print("Invalid grammar: RING_NUM at beginning of segment")
-                    
-                    self.segments[-1].append(len(self.segments[-1]))
-                
-                else:
-                    self.segments[-1].append(len(self.segments[-1]) - 1)
-
-            else:
-                self.segments[-1].append(len(self.segments[-1]))
-        
+        if tokentype in [TokenType.BRANCH_START, TokenType.BRANCH_END, TokenType.RING_NUM]:
+            self.segments.append([0])    
         elif token == "<bos>":
             self.segments[-1].append(len(self.segments[-1]))
             self.segments.append([])
-        
         else:
             self.segments[-1].append(len(self.segments[-1]))
-    
+            
     def update_equality(self, prev_tokenidx, tokenidx):
         if prev_tokenidx not in self.tokenidx2setidx:
             self.max_setidx += 1

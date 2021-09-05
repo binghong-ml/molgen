@@ -67,7 +67,7 @@ def get_tokentype(token):
     elif token == '(':
         return TokenType.BRANCH_START
     elif token == ')':
-        return TokenType.BRANCH_START
+        return TokenType.BRANCH_END
     elif token in '/\\':
         return TokenType.EZSTEREO
     elif token in ["<bos>", "<eos>", "<mask>", "<unk>", "<pad>"]:
