@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from joblib import Parallel, delayed
+from rdkit import Chem
 
 import torch
 from torch.utils.data import Dataset
@@ -20,20 +21,21 @@ class ZincNoSingleBondDataset(Dataset):
     raw_dir = "../resource/data/zinc/raw"
     processed_dir = "../resource/data/zinc/nosinglebond"
     def __init__(self, split):
+        smiles_list_path = os.path.join(self.raw_dir, f"{split}.txt")
+        self.smiles_list = Path(smiles_list_path).read_text(encoding="utf=8").splitlines()
+
         tokenizer_path = os.path.join(self.processed_dir, "tokenizer.json")
-        strings_path = os.path.join(self.processed_dir, f"{split}.txt")
-        if not os.path.exists(tokenizer_path) or not os.path.exists(strings_path):
-            self.setup()
+        if not os.path.exists(tokenizer_path) or not os.path.exists(tokenizer_path):
+            self.setup()        
         
         self.tokenizer = Tokenizer.from_file(tokenizer_path)
-        self.strings = Path(strings_path).read_text(encoding="utf=8").splitlines()
         
     def __len__(self):
-        return len(self.strings)
+        return len(self.smiles_list)
 
     def __getitem__(self, idx):
-        string = self.strings[idx]
-        smiles = string.replace(" ", "")
+        smiles = self.smiles_list[idx]
+        string = self.smiles2string(smiles)
         tokens = self.tokenizer.decode(self.tokenizer.encode(string).ids, skip_special_tokens=False).split(" ")
         return SmilesState(tokens).featurize(self.tokenizer)
     
@@ -62,9 +64,19 @@ class ZincNoSingleBondDataset(Dataset):
         
     def process_smiles_list(self, smiles_list):
         return Parallel(n_jobs=8)(delayed(tokenize)(smiles) for smiles in smiles_list)
+    
+    def smiles2string(self, smiles):
+        mol = Chem.MolFromSmiles(smiles)
+        smiles = Chem.MolToSmiles(mol, canonical=False, doRandom=True, isomericSmiles=False)
+        return tokenize(smiles)
 
 class ZincYesSingleBondDataset(ZincNoSingleBondDataset):
     raw_dir = "../resource/data/zinc/raw"
     processed_dir = "../resource/data/zinc/yessinglebond"
     def process_smiles_list(self, smiles_list):
         return Parallel(n_jobs=8)(delayed(tokenize_with_singlebond)(smiles) for smiles in smiles_list)
+    
+    def smiles2string(self, smiles):
+        mol = Chem.MolFromSmiles(smiles)
+        smiles = Chem.MolToSmiles(mol, canonical=False, doRandom=True, isomericSmiles=False, allBondsExplicit=True)
+        return tokenize(smiles)
