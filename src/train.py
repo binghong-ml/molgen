@@ -83,7 +83,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             distance_squares, 
             equality_squares, 
             isopen_squares, 
-            endeds
+            _
          ) = batched_data
 
         # decoding

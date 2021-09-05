@@ -291,7 +291,7 @@ class SmilesState(object):
     def get_smiles(self):
         bosidx = 0 if self.bosidx is None else self.bosidx
         eosidx = len(self.tokens) if self.eosidx is None else self.eosidx
-        return "".join(self.tokens[bosidx + 1 : eosidx - 1])
+        return "".join(self.tokens[bosidx + 1 : eosidx])
 
     @staticmethod
     def collate(data_list, pad_id=0):

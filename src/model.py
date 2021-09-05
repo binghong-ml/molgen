@@ -67,12 +67,12 @@ class BaseGenerator(nn.Module):
         #
         self.use_linedistance = use_linedistance
         if self.use_linedistance:
-            self.linedistance_embedding_layer = nn.Embedding(500, nhead)
+            self.linedistance_embedding_layer = nn.Embedding(200, nhead)
 
         #
         self.use_distance = use_distance
         if self.use_distance:
-            self.distance_embedding_layer = nn.Embedding(500, nhead)
+            self.distance_embedding_layer = nn.Embedding(200, nhead)
 
         #
         self.use_equality = use_equality
