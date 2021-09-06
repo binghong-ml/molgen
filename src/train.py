@@ -151,7 +151,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
         unique_smiles_list = list(set(smiles_list))
 
-        statistics["sample/valid"] = float(len(smiles_list)) / self.hparams.sample_batch_size
+        statistics["sample/valid"] = float(len(smiles_list)) / num_samples
         statistics["sample/unique"] = float(len(unique_smiles_list)) / len(smiles_list) if len(smiles_list) > 0 else 0.0
 
         for key, val in statistics.items():

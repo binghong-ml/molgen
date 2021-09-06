@@ -68,8 +68,8 @@ class ZincNoSingleBondDataset(Dataset):
         return Parallel(n_jobs=8)(delayed(tokenize)(smiles) for smiles in smiles_list)
 
     def smiles2string(self, smiles):
-        mol = Chem.MolFromSmiles(smiles)
-        smiles = Chem.MolToSmiles(mol, canonical=False, doRandom=True, isomericSmiles=False)
+        #mol = Chem.MolFromSmiles(smiles)
+        #smiles = Chem.MolToSmiles(mol, canonical=False%, doRandom=True, isomericSmiles=False)
         return tokenize(smiles)
 
 
@@ -82,7 +82,7 @@ class ZincYesSingleBondDataset(ZincNoSingleBondDataset):
 
     def smiles2string(self, smiles):
         mol = Chem.MolFromSmiles(smiles)
-        smiles = Chem.MolToSmiles(mol, canonical=False, doRandom=True, isomericSmiles=False, allBondsExplicit=True)
+        smiles = Chem.MolToSmiles(mol, allBondsExplicit=True)
         return tokenize(smiles)
 
 class MosesNoSingleBondDataset(ZincNoSingleBondDataset):

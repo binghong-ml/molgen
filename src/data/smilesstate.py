@@ -209,12 +209,9 @@ class SmilesState(object):
             bond_order = get_bondorder(token)
             prev_tokenidx = tokenidx - 1
             
-            if self.tokens[prev_tokenidx] in [
-                TokenType.ATOM, TokenType.BRANCH_START, TokenType.BRANCH_END, TokenType.RING_NUM
-                ]:
-                atomidx = self.tokenidx2atomidx.get(prev_tokenidx, None)
-                self.atomidx2degree[atomidx] += 1
-                self.atomidx2numH[atomidx] -= bond_order
+            atomidx = self.tokenidx2atomidx.get(prev_tokenidx, None)
+            self.atomidx2degree[atomidx] += 1
+            self.atomidx2numH[atomidx] -= bond_order
             
         elif tokentype in [TokenType.BRANCH_START, TokenType.BRANCH_END, TokenType.RING_NUM]:
             atomidx = self.tokenidx2atomidx.get(tokenidx, None)
