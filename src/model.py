@@ -46,7 +46,6 @@ class BaseGenerator(nn.Module):
         use_nodefeats,
         use_linedistance,
         use_distance,
-        use_equality,
         use_isopen,
     ):
         super(BaseGenerator, self).__init__()
@@ -56,28 +55,21 @@ class BaseGenerator(nn.Module):
 
         #
         self.tok_emb = TokenEmbedding(vocab_size, emb_size)
-
+        self.tokentype_embedding_layer = nn.Embedding(7, emb_size)
+        self.pos_emb = AbsolutePositionalEncoding(emb_size)
+        
         #
-        self.use_nodefeats = use_nodefeats
-        if self.use_nodefeats:
-            self.tokentype_embedding_layer = nn.Embedding(7, emb_size)
-            self.degree_embedding_layer = nn.Embedding(10, emb_size)
-            self.numH_embedding_layer = nn.Embedding(10, emb_size)
+        self.input_dropout = nn.Dropout(dropout)
 
         #
         self.use_linedistance = use_linedistance
         if self.use_linedistance:
-            self.linedistance_embedding_layer = nn.Embedding(200, nhead)
+            self.linedistance_embedding_layer = nn.Embedding(21, nhead)
 
         #
         self.use_distance = use_distance
         if self.use_distance:
-            self.distance_embedding_layer = nn.Embedding(200, nhead)
-
-        #
-        self.use_equality = use_equality
-        if self.use_equality:
-            self.equality_embedding_layer = nn.Embedding(2, nhead)
+            self.distance_embedding_layer = nn.Embedding(21, nhead)
 
         #
         self.use_isopen = use_isopen
@@ -85,7 +77,10 @@ class BaseGenerator(nn.Module):
             self.isopen_embedding_layer = nn.Embedding(2, nhead)
 
         #
-        self.input_dropout = nn.Dropout(dropout)
+        self.use_nodefeats = use_nodefeats
+        if self.use_nodefeats:
+            self.degree_embedding_layer = nn.Embedding(10, nhead)
+            self.bondorder_embedding_layer = nn.Embedding(21, nhead)
 
         #
         encoder_layer = nn.TransformerEncoderLayer(emb_size, nhead, dim_feedforward, dropout, "gelu")
@@ -98,56 +93,45 @@ class BaseGenerator(nn.Module):
     def forward(self, 
         token_sequences, 
         tokentype_sequences, 
-        degree_sequences,
-        numH_sequences,
         linedistance_squares, 
         distance_squares, 
-        equality_squares, 
-        isopen_squares
+        isopen_squares, 
+        degree_squares,
+        bondorder_squares,
         ):
         batch_size = token_sequences.size(0)
         sequence_len = token_sequences.size(1)
         
         token_sequences = token_sequences.transpose(0, 1)
-        
+        tokentype_sequences = tokentype_sequences.transpose(0, 1) 
+            
         #
         out = self.tok_emb(token_sequences)
-        if self.use_nodefeats:
-            tokentype_sequences = tokentype_sequences.transpose(0, 1) 
-            degree_sequences = degree_sequences.transpose(0, 1)
-            numH_sequences = numH_sequences.transpose(0, 1)
-            
-            out += self.tokentype_embedding_layer(tokentype_sequences)
-            out += self.degree_embedding_layer(degree_sequences)
-            out += self.numH_embedding_layer(numH_sequences)           
-        
+        out += self.tokentype_embedding_layer(tokentype_sequences)
+        out += self.pos_emb(sequence_len)
         out = self.input_dropout(out)
 
         #
-        bool_mask = (torch.triu(torch.ones((sequence_len, sequence_len))) == 1).transpose(0, 1)
-        bool_mask = bool_mask.view(1, 1, sequence_len, sequence_len).repeat(batch_size, self.nhead, 1, 1)
-
-        mask = bool_mask.float()
-        mask = mask.masked_fill(bool_mask == 0, float("-inf"))
-        mask = mask.masked_fill(bool_mask == 1, float(0.0))
-        mask = mask.to(out.device)
-
+        mask = torch.zeros(batch_size, self.nhead, sequence_len, sequence_len, device = out.device)
         if self.use_linedistance:
-            linedistance_embedding = self.linedistance_embedding_layer(linedistance_squares).permute(0, 3, 1, 2)
-            mask[bool_mask == 1] = mask[bool_mask == 1] + linedistance_embedding[bool_mask == 1]
-
+            mask += self.linedistance_embedding_layer(linedistance_squares).permute(0, 3, 1, 2)
+            
         if self.use_distance:
-            distance_embedding = self.distance_embedding_layer(distance_squares).permute(0, 3, 1, 2)
-            mask[bool_mask == 1] = mask[bool_mask == 1] + distance_embedding[bool_mask == 1]
-
-        if self.use_equality:
-            equality_embedding = self.equality_embedding_layer(equality_squares).permute(0, 3, 1, 2)
-            mask[bool_mask == 1] = mask[bool_mask == 1] + equality_embedding[bool_mask == 1]
-
+            mask += self.distance_embedding_layer(distance_squares).permute(0, 3, 1, 2)
+            
         if self.use_isopen:
-            isopen_embedding = self.equality_embedding_layer(isopen_squares).permute(0, 3, 1, 2)
-            mask[bool_mask == 1] = mask[bool_mask == 1] + isopen_embedding[bool_mask == 1]
-
+            mask += self.isopen_embedding_layer(isopen_squares).permute(0, 3, 1, 2)
+            
+        if self.use_nodefeats:
+            mask += self.degree_embedding_layer(degree_squares).permute(0, 3, 1, 2)
+            mask += self.bondorder_embedding_layer(bondorder_squares).permute(0, 3, 1, 2)
+        
+        #
+        bool_mask = (torch.triu(torch.ones((sequence_len, sequence_len))) == 1).transpose(0, 1)
+        bool_mask = bool_mask.view(1, 1, sequence_len, sequence_len).repeat(batch_size, self.nhead, 1, 1).to(out.device)
+        mask = mask.masked_fill(bool_mask == 0, float("-inf"))
+        
+            
         #
         mask = mask.view(-1, sequence_len, sequence_len)
         key_padding_mask = (token_sequences == self.tokenizer.token_to_id("<pad>")).transpose(0, 1)

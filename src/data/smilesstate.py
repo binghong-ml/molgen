@@ -8,14 +8,21 @@ from torch.nn.utils.rnn import pad_sequence
 from data.tokenize import get_tokentype, TokenType, get_bondorder
 from copy import deepcopy
 
+VALENCES = {"B": 3, "C": 4, "N": 5, "O": 2, "P": 5, "S": 6, "F": 1, "Cl": 1, "Br": 1, "I": 1}
+
 
 class SmilesState(object):
     def __init__(self, tokens):
         self.tokens = []
         self.tokentypes = []
         self.num_tokens = 0
-        self.degrees = []
-        self.numHs = []
+        self.path_lens_list = []
+        self.degrees_list = []
+        self.bondorders_list = []
+        
+        #
+        self.graph = nx.Graph()
+        
         #
         self.max_atomidx = 0
         self.tokenidx2atomidx = dict()
@@ -26,12 +33,10 @@ class SmilesState(object):
         self.open_branches = []
         self.open_ring_nums = dict()
 
-        #
-        self.segments = [[]]
-
+        
         #
         self.atomidx2degree = dict()
-        self.atomidx2numH = dict()
+        self.atomidx2bondorder = dict()
         
         #
         self.bosidx = None
@@ -115,114 +120,123 @@ class SmilesState(object):
         if token == "<eos>":
             self.eosidx = tokenidx if self.eosidx is None else self.eosidx
 
-        # Isopen logic
-        self.tokenidx2isopen[tokenidx] = deepcopy(self.open_branches) + deepcopy(list(self.open_ring_nums.values()))
+        # Graph logic
+        self.graph.add_node(tokenidx)
+        if tokentype == TokenType.ATOM:
+            #
+            anchor = tokenidx - 1
+            
+            #
+            if self.tokens[anchor] == "<bos>":
+                self.graph.add_edge(anchor, tokenidx, w=1)
 
-        # Segmentation logic
-        if tokentype in [TokenType.ATOM, TokenType.BOND]:
-            self.segments[-1].append(len(self.segments[-1]))
-
-        elif tokentype in [TokenType.BRANCH_START, TokenType.BRANCH_END]:
-            self.segments.append([0])
-        
-        elif tokentype == TokenType.RING_NUM:
-            if token in self.open_ring_nums:
-                self.segments[-1].append(len(self.segments[-1]))
-            else:
-                self.segments.append([0])
-
-        elif tokentype == TokenType.SPECIAL:
-            if token == "<bos>":
-                self.segments[-1].append(len(self.segments[-1]))
-                self.segments.append([])
-
-            elif token == "<eos>":
-                self.segments.append([0])
-
-            else:
-                self.segments[-1].append(len(self.segments[-1]))
-
-        else:
-            assert False
-
-        # Equality logic
-        def update_new_atom(tokenidx):
-            self.max_atomidx += 1
+            #
             atomidx = self.max_atomidx
             self.tokenidx2atomidx[tokenidx] = atomidx
-            self.atomidx2tokenidxs[self.max_atomidx] = [tokenidx]
+            self.atomidx2tokenidxs[atomidx] = [tokenidx]
+            self.max_atomidx += 1
+            
+            #    
+            if self.tokens[tokenidx -1] == "<bos>":
+                degree = 0
+                bondorder = 0
+            
+            elif self.tokentypes[tokenidx -1] == TokenType.BOND:
+                degree = 1
+                bondorder = get_bondorder(self.tokens[tokenidx -1])
+                
+            atomidx = self.tokenidx2atomidx[tokenidx]
+            self.atomidx2degree[atomidx] = degree
+            self.atomidx2bondorder[atomidx] = bondorder
 
-        def update_seen_atom(prev_tokenidx, tokenidx):
-            atomidx = self.tokenidx2atomidx[prev_tokenidx]
+        elif tokentype == TokenType.BOND:
+            #
+            anchor = tokenidx - 1
+            
+            #
+            self.graph.add_edge(anchor, tokenidx, w=1)
+            
+            #
+
+            #
+            atomidx = self.tokenidx2atomidx[tokenidx - 1]
+            self.atomidx2degree[atomidx] += 1
+            self.atomidx2bondorder[atomidx] += get_bondorder(token)
+
+        elif tokentype == TokenType.BRANCH_START:
+            #
+            anchor = tokenidx - 1
+
+            #
+            self.graph.add_edge(anchor, tokenidx, w=0)
+            self.open_branches.append(tokenidx)
+
+            #
+            atomidx = self.tokenidx2atomidx[anchor]
             self.tokenidx2atomidx[tokenidx] = atomidx
             self.atomidx2tokenidxs[atomidx].append(tokenidx)
 
-        if tokentype in [TokenType.ATOM, TokenType.BOND, TokenType.SPECIAL]:
-            update_new_atom(tokenidx)
-
-        elif tokentype == TokenType.BRANCH_START:
-            prev_tokenidx = tokenidx - 1
-            self.open_branches.append(prev_tokenidx)
-            update_seen_atom(prev_tokenidx, tokenidx)
-
+            #
+            
         elif tokentype == TokenType.BRANCH_END:
-            prev_tokenidx = self.open_branches.pop()
-            update_seen_atom(prev_tokenidx, tokenidx)
+            #
+            anchor = self.open_branches.pop()
+
+            #
+            self.graph.add_edge(anchor, tokenidx, w=0)
+
+            #
+            atomidx = self.tokenidx2atomidx[anchor]
+            self.tokenidx2atomidx[tokenidx] = atomidx
+            self.atomidx2tokenidxs[atomidx].append(tokenidx)
+
+            #
 
         elif tokentype == TokenType.RING_NUM:
             if token not in self.open_ring_nums:
-                prev_tokenidx = tokenidx - 1
-                self.open_ring_nums[token] = prev_tokenidx
-                update_seen_atom(prev_tokenidx, tokenidx)
+                #
+                anchor = tokenidx - 1
 
+                #
+                self.graph.add_edge(anchor, tokenidx, w=0)
+                self.open_ring_nums[token] = tokenidx
+
+                #
+                atomidx = self.tokenidx2atomidx[anchor]
+                self.tokenidx2atomidx[tokenidx] = atomidx
+                self.atomidx2tokenidxs[atomidx].append(tokenidx)
+                
+                #
             else:
-                prev_tokenidx = self.open_ring_nums.pop(token)
-                update_seen_atom(prev_tokenidx, tokenidx)
+                #
+                anchor = self.open_ring_nums.pop(token)
+                
+                #
+                self.graph.add_edge(anchor, tokenidx, w=0)
+                
+                #
+                atomidx = self.tokenidx2atomidx[anchor]
+                self.tokenidx2atomidx[tokenidx] = atomidx
+                self.atomidx2tokenidxs[atomidx].append(tokenidx)
+                
+                #
+        elif tokentype == TokenType.SPECIAL:
+            pass
+
         else:
             assert False
-
-        # degree and numHs logic
-        if tokentype == TokenType.ATOM:
-            prev_tokenidx = tokenidx -1
-            try:
-                valence = Chem.MolFromSmiles(token).GetAtoms()[0].GetTotalValence()
-            except:
-                valence = Chem.MolFromSmiles(token.upper()).GetAtoms()[0].GetTotalValence()
-                
-            if self.tokens[prev_tokenidx] == "<bos>":
-                degree = 0
-                numH = valence
-                
-            elif self.tokentypes[prev_tokenidx] == TokenType.BOND:
-                degree = 1
-                bondorder = get_bondorder(self.tokens[prev_tokenidx])
-                numH = valence - bondorder
-
-            atomidx = self.tokenidx2atomidx[tokenidx]
-            self.atomidx2degree[atomidx] = degree
-            self.atomidx2numH[atomidx] = numH
         
-        elif tokentype == TokenType.BOND:
-            degree = -1
-            numH = -1
-            bond_order = get_bondorder(token)
-            prev_tokenidx = tokenidx - 1
-            
-            atomidx = self.tokenidx2atomidx[prev_tokenidx]
-            self.atomidx2degree[atomidx] += 1
-            self.atomidx2numH[atomidx] -= bond_order
-            
-        elif tokentype in [TokenType.BRANCH_START, TokenType.BRANCH_END, TokenType.RING_NUM]:
-            atomidx = self.tokenidx2atomidx[tokenidx]
-            degree = deepcopy(self.atomidx2degree[atomidx])
-            numH = deepcopy(self.atomidx2numH[atomidx])
+        path_lens = nx.single_source_bellman_ford_path_length(self.graph, tokenidx, weight="w")    
+        path_lens = [path_lens.get(i, -1) + 1 for i in range(len(self.tokens))]
+        self.path_lens_list.append(torch.LongTensor(path_lens))
+        
+        # Isopen logic
+        self.tokenidx2isopen[tokenidx] = deepcopy(self.open_branches) + deepcopy(list(self.open_ring_nums.values()))
 
-        elif tokentype == TokenType.SPECIAL:
-            degree = -1
-            numH = -1
-            
-        self.degrees.append(degree)
-        self.numHs.append(numH)            
+        # 
+        atomidxs = [self.tokenidx2atomidx.get(i, -1) for i in range(len(self.tokens))]
+        self.degrees_list.append(torch.LongTensor([self.atomidx2degree.get(i, -1) + 1 for i in atomidxs]))
+        self.bondorders_list.append(torch.LongTensor([self.atomidx2bondorder.get(i, -1) + 1 for i in atomidxs]))
 
     def featurize(self, tokenizer):
         num_tokens = len(self.tokens)
@@ -232,13 +246,6 @@ class SmilesState(object):
 
         #
         tokentype_sequence = torch.LongTensor(self.tokentypes)
-
-        # 
-        degree_sequence = torch.LongTensor([degree + 1 for degree in self.degrees])
-
-        #
-        numH_sequence = torch.LongTensor([numH * 2 + 1 for numH in self.numHs])
-        numH_sequence[numH_sequence < 0] = 0
 
         #
         linedistance_square = (
@@ -252,36 +259,31 @@ class SmilesState(object):
             linedistance_square[self.eosidx, :] = 0
             linedistance_square[:, self.eosidx] = 0
 
-        #
-        segments = [torch.LongTensor(segment) for segment in self.segments]
-        segmentdistance_squares = [torch.abs(segment.unsqueeze(1) - segment.unsqueeze(0)) + 1 for segment in segments]
-        distance_square = torch.block_diag(*segmentdistance_squares)
+        linedistance_square[linedistance_square > 20] = 20
 
         #
-        equality_square = torch.zeros(num_tokens, num_tokens, dtype=torch.long)
-        for tokenidxs in self.atomidx2tokenidxs.values():
-            mask = torch.zeros(num_tokens, dtype=torch.long)
-            mask[tokenidxs] = 1
-            equality_square += mask.unsqueeze(0) * mask.unsqueeze(1)
-        
-        equality_square[torch.arange(num_tokens).unsqueeze(1) == torch.arange(num_tokens).unsqueeze(0)] = 0
+        distance_square = pad_sequence(self.path_lens_list, batch_first=True, padding_value=0)
+        distance_square[distance_square > 20] = 20
 
         #
         isopen_square = torch.zeros(num_tokens, num_tokens, dtype=torch.long)
         for tokenidx, isopen in self.tokenidx2isopen.items():
             isopen_square[tokenidx, isopen] = True
-
+        
+        #
+        degree_square = pad_sequence(self.degrees_list, batch_first=True, padding_value=0)
+        bondorder_square = pad_sequence(self.bondorders_list, batch_first=True, padding_value=0)
+        
         ended = torch.tensor(True) if self.eosidx is not None else torch.tensor(False)
 
         return (
             token_sequence, 
             tokentype_sequence, 
-            degree_sequence,
-            numH_sequence,
             linedistance_square, 
             distance_square, 
-            equality_square, 
             isopen_square, 
+            degree_square,
+            bondorder_square,
             ended
         )
 
@@ -295,36 +297,33 @@ class SmilesState(object):
         (
             token_sequences, 
             tokentype_sequences, 
-            degree_sequences,
-            numH_sequences,
             linedistance_squares, 
             distance_squares, 
-            equality_squares, 
             isopen_squares, 
+            degree_squares,
+            bondorder_squares,
             endeds
         ) = zip(*data_list)
 
         token_sequences = pad_sequence(token_sequences, batch_first=True, padding_value=pad_id)
         tokentype_sequences = pad_sequence(tokentype_sequences, batch_first=True, padding_value=pad_id)
-        degree_sequences= pad_sequence(degree_sequences, batch_first=True, padding_value=pad_id)
-        numH_sequences= pad_sequence(numH_sequences, batch_first=True, padding_value=pad_id)
         
         linedistance_squares = pad_squares(linedistance_squares, pad_id)
         distance_squares = pad_squares(distance_squares, pad_id)
-        equality_squares = pad_squares(equality_squares, pad_id)
         isopen_squares = pad_squares(isopen_squares, pad_id)
+        degree_squares= pad_squares(degree_squares, pad_id)
+        bondorder_squares= pad_squares(bondorder_squares, pad_id)
         
         endeds = torch.stack(endeds)
 
         return (
             token_sequences, 
             tokentype_sequences, 
-            degree_sequences,
-            numH_sequences,
             linedistance_squares, 
             distance_squares, 
-            equality_squares, 
             isopen_squares, 
+            degree_squares,
+            bondorder_squares,
             endeds
         )
 

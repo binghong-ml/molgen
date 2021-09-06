@@ -49,7 +49,6 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             hparams.use_nodefeats,
             hparams.use_linedistance,
             hparams.use_distance,
-            hparams.use_equality,
             hparams.use_isopen,
         )
 
@@ -82,12 +81,11 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         (
             token_sequences, 
             tokentype_sequences, 
-            degree_sequences,
-            numH_sequences,
             linedistance_squares, 
             distance_squares, 
-            equality_squares, 
             isopen_squares, 
+            degree_squares,
+            bondorder_squares,
             _
          ) = batched_data
 
@@ -95,12 +93,11 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         logits = self.model(
             token_sequences, 
             tokentype_sequences, 
-            degree_sequences,
-            numH_sequences, 
             linedistance_squares, 
             distance_squares, 
-            equality_squares, 
-            isopen_squares
+            isopen_squares, 
+            degree_squares,
+            bondorder_squares,
             )
         recon_loss = compute_sequence_cross_entropy(logits, token_sequences)
         loss += recon_loss
@@ -172,7 +169,6 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--use_nodefeats", action="store_true")
         parser.add_argument("--use_linedistance", action="store_true")
         parser.add_argument("--use_distance", action="store_true")
-        parser.add_argument("--use_equality", action="store_true")
         parser.add_argument("--use_isopen", action="store_true")
 
         parser.add_argument("--lr", type=float, default=1e-4)
