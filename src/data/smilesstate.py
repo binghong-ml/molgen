@@ -33,7 +33,6 @@ class SmilesState(object):
         self.atomidx2degree = dict()
         self.atomidx2numH = dict()
         
-
         #
         self.bosidx = None
         self.eosidx = None
@@ -209,19 +208,14 @@ class SmilesState(object):
             bond_order = get_bondorder(token)
             prev_tokenidx = tokenidx - 1
             
-            atomidx = self.tokenidx2atomidx.get(prev_tokenidx, None)
+            atomidx = self.tokenidx2atomidx[prev_tokenidx]
             self.atomidx2degree[atomidx] += 1
             self.atomidx2numH[atomidx] -= bond_order
             
         elif tokentype in [TokenType.BRANCH_START, TokenType.BRANCH_END, TokenType.RING_NUM]:
-            atomidx = self.tokenidx2atomidx.get(tokenidx, None)
-            if atomidx is not None:
-                degree = deepcopy(self.atomidx2degree[atomidx])
-                numH = deepcopy(self.atomidx2numH[atomidx])
-            else:
-                degree = -1
-                numH = -1
-            
+            atomidx = self.tokenidx2atomidx[tokenidx]
+            degree = deepcopy(self.atomidx2degree[atomidx])
+            numH = deepcopy(self.atomidx2numH[atomidx])
 
         elif tokentype == TokenType.SPECIAL:
             degree = -1
