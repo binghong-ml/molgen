@@ -12,7 +12,7 @@ from neptune.new.integrations.pytorch_lightning import NeptuneLogger
 import moses
 
 from model.generator import BaseGenerator
-from data.dataset import ZincDataset, MosesDataset
+from data.dataset import ZincDataset, MosesDataset, PolymerDataset
 from data.data import TargetData
 from util import compute_sequence_cross_entropy, canonicalize
 
@@ -27,9 +27,10 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         self.sanity_checked = False
 
     def setup_datasets(self, hparams):
-        dataset_cls = {"zinc": ZincDataset, "moses": MosesDataset}.get(hparams.dataset_name)
+        dataset_cls = {"zinc": ZincDataset, "moses": MosesDataset, "polymer": PolymerDataset}.get(hparams.dataset_name)
         self.train_dataset = dataset_cls("train")
         self.val_dataset = dataset_cls("valid")
+        self.test_dataset = dataset_cls("test")
         self.train_smiles_set = set(self.train_dataset.smiles_list)
         self.tokenizer = self.train_dataset.tokenizer
 
@@ -43,6 +44,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             hparams.nhead,
             hparams.dim_feedforward,
             hparams.dropout,
+            hparams.use_linedistance,
         )
 
     ### Dataloaders and optimizers
@@ -98,7 +100,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
     def validation_epoch_end(self, outputs):
         num_samples = self.hparams.num_samples if self.sanity_checked else 2
-        max_len = 120 if self.sanity_checked else 10
+        max_len = self.hparams.max_len if self.sanity_checked else 10
         maybe_smiles_list = self.sample(num_samples, max_len)
 
         smiles_list = []
@@ -148,23 +150,23 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--nhead", type=int, default=8)
         parser.add_argument("--dim_feedforward", type=int, default=2048)
         parser.add_argument("--dropout", type=int, default=0.1)
+        parser.add_argument("--use_linedistance", action="store_true")
 
         parser.add_argument("--lr", type=float, default=1e-4)
         parser.add_argument("--batch_size", type=int, default=256)
         parser.add_argument("--num_workers", type=int, default=8)
 
-        parser.add_argument("--max_len", type=int, default=120)
+        parser.add_argument("--max_len", type=int, default=250)
         parser.add_argument("--num_samples", type=int, default=1024)
-        parser.add_argument("--sample_batch_size", type=int, default=256)        
+        parser.add_argument("--sample_batch_size", type=int, default=256)
         parser.add_argument("--test_num_samples", type=int, default=30000)
         
         return parser
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     BaseGeneratorLightningModule.add_args(parser)
-    parser.add_argument("--max_epochs", type=int, default=10)
+    parser.add_argument("--max_epochs", type=int, default=100)
     parser.add_argument("--gradient_clip_val", type=float, default=0.5)
     parser.add_argument("--checkpoint_dir", type=str, default="../resource/checkpoint/default")
     parser.add_argument("--load_checkpoint_path", type=str, default="")
@@ -192,11 +194,11 @@ if __name__ == "__main__":
     trainer.fit(model)
 
     model.load_from_checkpoint(checkpoint_callback.best_model_path)
-    smiles_list = model.sample(30000, hparams.max_len, verbose=True)
+    smiles_list = model.sample(hparams.test_num_samples, hparams.max_len, verbose=True)
     smiles_list_path = os.path.join(hparams.checkpoint_dir, "test.txt")
     Path(smiles_list_path).write_text("\n".join(smiles_list))
 
-    metrics = moses.get_all_metrics(smiles_list, n_jobs=8, device="cuda:0")
+    metrics = moses.get_all_metrics(smiles_list, n_jobs=8, device="cuda:0", test=model.test_dataset.smiles_list)
     print(metrics)
     for key in metrics:
         neptune_logger.experiment[f"moses/{key}"] = metrics[key]

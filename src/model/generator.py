@@ -43,6 +43,7 @@ class BaseGenerator(nn.Module):
         nhead,
         dim_feedforward,
         dropout,
+        use_linedistance,
     ):
         super(BaseGenerator, self).__init__()
         self.nhead = nhead
@@ -57,6 +58,7 @@ class BaseGenerator(nn.Module):
         self.input_dropout = nn.Dropout(dropout)
 
         #
+        self.use_linedistance = use_linedistance
         self.distance_embedding_layer = nn.Embedding(200, nhead)
         self.isopen_embedding_layer = nn.Embedding(2, nhead)
 
@@ -77,6 +79,15 @@ class BaseGenerator(nn.Module):
         #
         out = self.tok_emb(sequences) + self.pos_emb(sequence_len)
         out = self.input_dropout(out)
+
+        #
+        if self.use_linedistance:
+            arange_tsr = torch.arange(sequence_len)
+            distance_squares = torch.abs(arange_tsr.unsqueeze(0) - arange_tsr.unsqueeze(1))
+            distance_squares = distance_squares.view(1, 1, sequence_len, sequence_len)
+            distance_squares = distance_squares.repeat(batch_size, self.nhead, 1, 1)
+            distance_squares = distance_squares.to(out.device)
+            distance_squares[distance_squares > 199] = 199
 
         #
         mask = self.distance_embedding_layer(distance_squares).permute(0, 3, 1, 2)

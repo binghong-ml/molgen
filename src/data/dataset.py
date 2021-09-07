@@ -42,14 +42,25 @@ ALL_PATHS = [
 
 def load_tokenizer():
     if not os.path.exists(TOKENIZER_PATH):
-        setup_tokenizer()
+        setup_tokenizer(ALL_PATHS, TOKENIZER_PATH)
 
     return Tokenizer.from_file(TOKENIZER_PATH)
 
+def load_polymer_tokenizer():
+    tokenizer_path = f"{DATA_DIR}/polymers/tokenizer.json"
+    if not os.path.exists(tokenizer_path):
+        polymer_paths = [
+            f"{DATA_DIR}/polymers/raw/train.txt", 
+            f"{DATA_DIR}/polymers/raw/valid.txt", 
+            f"{DATA_DIR}/polymers/raw/test.txt"
+            ]
+        setup_tokenizer(polymer_paths, tokenizer_path)
+    
+    return Tokenizer.from_file(tokenizer_path)
 
-def setup_tokenizer():
+def setup_tokenizer(all_paths, tokenizer_path):
     all_smiles_list = []
-    for smiles_list_path in ALL_PATHS:
+    for smiles_list_path in all_paths:
         smiles_list = Path(smiles_list_path).read_text(encoding="utf-8").splitlines()
         smiles_list = [smiles for elem in smiles_list for smiles in elem.split(", ")]
         all_smiles_list += smiles_list
@@ -64,7 +75,7 @@ def setup_tokenizer():
         single="<bos> $A <eos>",
         special_tokens=[("<bos>", tokenizer.token_to_id("<bos>")), ("<eos>", tokenizer.token_to_id("<eos>")),],
     )
-    tokenizer.save(TOKENIZER_PATH)
+    tokenizer.save(tokenizer_path)
 
 class ZincDataset(Dataset):
     raw_dir = f"{DATA_DIR}/zinc/raw"
@@ -101,6 +112,13 @@ class MosesDataset(ZincDataset):
     
 class MosesAutoEncoderDataset(ZincAutoEncoderDataset):
     raw_dir = f"{DATA_DIR}/moses/raw"
+
+class PolymerDataset(ZincDataset):
+    raw_dir = f"{DATA_DIR}/polymers/raw"
+    def __init__(self, split):
+        smiles_list_path = os.path.join(self.raw_dir, f"{split}.txt")
+        self.smiles_list = Path(smiles_list_path).read_text(encoding="utf=8").splitlines()
+        self.tokenizer = load_polymer_tokenizer()
 
 class LogP04Dataset(Dataset):
     raw_dir = f"{DATA_DIR}/logp04/raw"

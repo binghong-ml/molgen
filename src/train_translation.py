@@ -122,7 +122,7 @@ class BaseTranslatorLightningModule(pl.LightningModule):
     def validation_step(self, batched_data, batch_idx):
         statistics = dict()
         src, src_smiles_list = batched_data
-        max_len = 120 if self.sanity_checked else 10
+        max_len = self.hparams.max_len if self.sanity_checked else 10
 
         with torch.no_grad():
             tgt_data_list = self.model.decode(src, max_len=max_len, device=self.device)
@@ -148,7 +148,7 @@ class BaseTranslatorLightningModule(pl.LightningModule):
         src_smiles2tgt_smiles_list = defaultdict(list)
         for _ in range(20):
             with torch.no_grad():
-                tgt_data_list = self.model.decode(src, max_len=120, device=self.device)
+                tgt_data_list = self.model.decode(src, max_len=self.hparams.max_len, device=self.device)
 
             for src_smiles, tgt_data in zip(src_smiles_list, tgt_data_list):
                 src_smiles2tgt_smiles_list[src_smiles].append(tgt_data.get_smiles())
@@ -156,7 +156,7 @@ class BaseTranslatorLightningModule(pl.LightningModule):
         dict_path = os.path.join(self.hparams.checkpoint_dir, "test_pairs.txt")
         for src_smiles in src_smiles_list:
             with Path(dict_path).open("a") as fp:
-                fp.write(", ".join([src_smiles] + src_smiles2tgt_smiles_list[src_smiles]) + "\n")
+                fp.write(" ".join([src_smiles] + src_smiles2tgt_smiles_list[src_smiles]) + "\n")
 
     @staticmethod
     def add_args(parser):
@@ -173,6 +173,7 @@ class BaseTranslatorLightningModule(pl.LightningModule):
         parser.add_argument("--num_workers", type=int, default=8)
 
         parser.add_argument("--num_repeats", type=int, default=20)
+        parser.add_argument("--max_len", type=int, default=250)
 
         return parser
 
@@ -196,16 +197,14 @@ if __name__ == "__main__":
         logger = NeptuneLogger(project="sungsahn0215/molgen", close_after_fit=False)
         logger.run["params"] = vars(hparams)
         logger.run["sys/tags"].add(hparams.tag.split("_"))
-    else:
-        logger = None
-    
-    callbacks = []
-    if not hparams.debug:
         checkpoint_callback = ModelCheckpoint(
             dirpath=os.path.join("../resource/checkpoint/", hparams.tag), monitor="validation/valid", mode="max",
         )
-        callbacks.append(checkpoint_callback)
-
+        callbacks = [checkpoint_callback]
+    else:
+        logger = None
+        callbacks = []
+        
     trainer = pl.Trainer(
         gpus=1,
         logger=logger,
