@@ -11,7 +11,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from neptune.new.integrations.pytorch_lightning import NeptuneLogger
 
 from model.translator import BaseTranslator
-from data.dataset import ZincAutoEncoderDataset
+from data.dataset import MosesAutoEncoderDataset, ZincAutoEncoderDataset
 from data.data import SourceData, TargetData
 from util import compute_sequence_cross_entropy, compute_sequence_accuracy, canonicalize
 from score import _raw_plogp_improvement
@@ -26,8 +26,9 @@ class BaseTranslatorLightningModule(pl.LightningModule):
         self.sanity_checked = False
 
     def setup_datasets(self, hparams):
-        self.train_dataset = ZincAutoEncoderDataset("train")
-        self.val_dataset = ZincAutoEncoderDataset("valid")
+        dataset_cls = {"zinc": ZincAutoEncoderDataset, "moses": MosesAutoEncoderDataset}.get(hparams.dataset_name)
+        self.train_dataset = dataset_cls("train")
+        self.val_dataset = dataset_cls("valid")
         self.tokenizer = self.train_dataset.tokenizer
 
         def collate(data_list):
@@ -108,8 +109,7 @@ class BaseTranslatorLightningModule(pl.LightningModule):
         
     @staticmethod
     def add_args(parser):
-        parser.add_argument("--dataset_name", type=str, default="moses_yessinglebond")
-
+        parser.add_argument("--dataset_name", type=str, default="moses")
         parser.add_argument("--num_layers", type=int, default=6)
         parser.add_argument("--emb_size", type=int, default=1024)
         parser.add_argument("--nhead", type=int, default=8)

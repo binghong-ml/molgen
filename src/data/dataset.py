@@ -68,8 +68,6 @@ def setup_tokenizer():
 
 class ZincDataset(Dataset):
     raw_dir = f"{DATA_DIR}/zinc/raw"
-    vocab_raw_dir = f"{DATA_DIR}/zinc/raw"
-    vocab_dir = f"{DATA_DIR}/zinc/processed"
     def __init__(self, split):
         smiles_list_path = os.path.join(self.raw_dir, f"{split}.txt")
         self.smiles_list = Path(smiles_list_path).read_text(encoding="utf=8").splitlines()
@@ -100,13 +98,12 @@ class ZincAutoEncoderDataset(ZincDataset):
 
 class MosesDataset(ZincDataset):
     raw_dir = f"{DATA_DIR}/moses/raw"
-    vocab_raw_dir = f"{DATA_DIR}/moses/raw"
-    vocab_dir = f"{DATA_DIR}/moses/processed"
+    
+class MosesAutoEncoderDataset(ZincAutoEncoderDataset):
+    raw_dir = f"{DATA_DIR}/moses/raw"
 
 class LogP04Dataset(Dataset):
     raw_dir = f"{DATA_DIR}/logp04/raw"
-    vocab_raw_dir = f"{DATA_DIR}/logp04/raw"
-    vocab_dir = f"{DATA_DIR}/logp04/processed"
     def __init__(self, split):
         self.split = split
         if self.split == "train":
@@ -157,15 +154,9 @@ class LogP04Dataset(Dataset):
 
 class LogP06Dataset(LogP04Dataset):
     raw_dir = f"{DATA_DIR}/logp06/raw"
-    vocab_raw_dir = f"{DATA_DIR}/logp06/raw"
-    vocab_dir = f"{DATA_DIR}/logp06/processed"
 
 class DRD2Dataset(LogP04Dataset):
     raw_dir = f"{DATA_DIR}/drd2/raw"
-    vocab_raw_dir = f"{DATA_DIR}/drd2/raw"
-    vocab_dir = f"{DATA_DIR}/drd2/processed"
 
 class QEDDataset(LogP04Dataset):
     raw_dir = f"{DATA_DIR}/qed/raw"
-    vocab_raw_dir = f"{DATA_DIR}/qed/raw"
-    vocab_dir = f"{DATA_DIR}/qed/processed"
