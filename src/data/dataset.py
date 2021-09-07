@@ -70,7 +70,7 @@ class ZincDataset(Dataset):
     raw_dir = f"{DATA_DIR}/zinc/raw"
     def __init__(self, split):
         smiles_list_path = os.path.join(self.raw_dir, f"{split}.txt")
-        self.smiles_list = Path(smiles_list_path).read_text(encoding="utf=8").splitlines()[:1024]
+        self.smiles_list = Path(smiles_list_path).read_text(encoding="utf=8").splitlines()
         self.tokenizer = load_tokenizer()
 
     def __len__(self):
