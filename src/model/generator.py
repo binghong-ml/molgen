@@ -1,4 +1,4 @@
-from data.smilesstate import SmilesState
+from data.data import TargetData
 import torch
 import torch.nn as nn
 
@@ -43,10 +43,6 @@ class BaseGenerator(nn.Module):
         nhead,
         dim_feedforward,
         dropout,
-        use_nodefeats,
-        use_linedistance,
-        use_distance,
-        use_isopen,
     ):
         super(BaseGenerator, self).__init__()
         self.nhead = nhead
@@ -55,32 +51,14 @@ class BaseGenerator(nn.Module):
 
         #
         self.tok_emb = TokenEmbedding(vocab_size, emb_size)
-        self.tokentype_embedding_layer = nn.Embedding(7, emb_size)
         self.pos_emb = AbsolutePositionalEncoding(emb_size)
         
         #
         self.input_dropout = nn.Dropout(dropout)
 
         #
-        self.use_linedistance = use_linedistance
-        if self.use_linedistance:
-            self.linedistance_embedding_layer = nn.Embedding(200, nhead)
-
-        #
-        self.use_distance = use_distance
-        if self.use_distance:
-            self.distance_embedding_layer = nn.Embedding(200, nhead)
-
-        #
-        self.use_isopen = use_isopen
-        if self.use_isopen:
-            self.isopen_embedding_layer = nn.Embedding(2, nhead)
-
-        #
-        self.use_nodefeats = use_nodefeats
-        if self.use_nodefeats:
-            self.degree_embedding_layer = nn.Embedding(10, nhead)
-            self.bondorder_embedding_layer = nn.Embedding(21, nhead)
+        self.distance_embedding_layer = nn.Embedding(200, nhead)
+        self.isopen_embedding_layer = nn.Embedding(2, nhead)
 
         #
         encoder_layer = nn.TransformerEncoderLayer(emb_size, nhead, dim_feedforward, dropout, "gelu")
@@ -90,71 +68,46 @@ class BaseGenerator(nn.Module):
         #
         self.generator = nn.Linear(emb_size, vocab_size)
 
-    def forward(self, 
-        token_sequences, 
-        tokentype_sequences, 
-        linedistance_squares, 
-        distance_squares, 
-        isopen_squares, 
-        degree_squares,
-        bondorder_squares,
-        ):
-        batch_size = token_sequences.size(0)
-        sequence_len = token_sequences.size(1)
-        
-        token_sequences = token_sequences.transpose(0, 1)
-        tokentype_sequences = tokentype_sequences.transpose(0, 1) 
+    def forward(self, tgt):
+        sequences, distance_squares, isopen_squares, _ = tgt        
+        batch_size = sequences.size(0)
+        sequence_len = sequences.size(1)
+        sequences = sequences.transpose(0, 1)
             
         #
-        out = self.tok_emb(token_sequences)
-        out += self.tokentype_embedding_layer(tokentype_sequences)
-        out += self.pos_emb(sequence_len)
+        out = self.tok_emb(sequences) + self.pos_emb(sequence_len)
         out = self.input_dropout(out)
 
         #
-        mask = torch.zeros(batch_size, self.nhead, sequence_len, sequence_len, device = out.device)
-        if self.use_linedistance:
-            mask += self.linedistance_embedding_layer(linedistance_squares).permute(0, 3, 1, 2)
-            
-        if self.use_distance:
-            mask += self.distance_embedding_layer(distance_squares).permute(0, 3, 1, 2)
-            
-        if self.use_isopen:
-            mask += self.isopen_embedding_layer(isopen_squares).permute(0, 3, 1, 2)
-            
-        if self.use_nodefeats:
-            mask += self.degree_embedding_layer(degree_squares).permute(0, 3, 1, 2)
-            mask += self.bondorder_embedding_layer(bondorder_squares).permute(0, 3, 1, 2)
-        
-        #
+        mask = self.distance_embedding_layer(distance_squares).permute(0, 3, 1, 2)
+        mask += self.isopen_embedding_layer(isopen_squares).permute(0, 3, 1, 2)
         bool_mask = (torch.triu(torch.ones((sequence_len, sequence_len))) == 1).transpose(0, 1)
         bool_mask = bool_mask.view(1, 1, sequence_len, sequence_len).repeat(batch_size, self.nhead, 1, 1).to(out.device)
         mask = mask.masked_fill(bool_mask == 0, float("-inf"))
+        mask = mask.reshape(-1, sequence_len, sequence_len)
         
-
         #
-        mask = mask.view(-1, sequence_len, sequence_len)
-        key_padding_mask = (token_sequences == self.tokenizer.token_to_id("<pad>")).transpose(0, 1)
+        key_padding_mask = (sequences == self.tokenizer.token_to_id("<pad>")).transpose(0, 1)
+
         out = self.transformer(out, mask, key_padding_mask)
+        out = out.transpose(0, 1)
         logits = self.generator(out)
-
-        logits = logits.transpose(0, 1)
-
+        
         return logits
 
     def decode(self, batch_size, max_len, device):
-        states = [SmilesState(["<bos>"]) for _ in range(batch_size)]
-        for _ in tqdm(range(max_len)):
+        states = [TargetData(["<bos>"]) for _ in range(batch_size)]
+        for _ in range(max_len):
             #
-            features = SmilesState.collate([state.featurize(self.tokenizer) for state in states])
-            features = [tsr.to(device) for tsr in features]
-            features, ended = features[:-1], features[-1]
-
+            batched_data = TargetData.collate([state.featurize(self.tokenizer) for state in states])
+            batched_data = [tsr.to(device) for tsr in batched_data]
+            
+            ended = batched_data[-1]
             if ended.all().item():
                 break
 
             #
-            logits = self(*features)[:, -1]
+            logits = self(batched_data)[:, -1]
             distribution = torch.distributions.Categorical(logits=logits)
             next_ids = distribution.sample()
             next_ids[ended] = self.tokenizer.token_to_id("<pad>")

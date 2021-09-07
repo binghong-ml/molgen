@@ -1,5 +1,7 @@
 import os
 import argparse
+from pathlib import Path
+
 import torch
 from torch.utils.data import DataLoader
 
@@ -7,9 +9,9 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
 from neptune.new.integrations.pytorch_lightning import NeptuneLogger
 
-from model import BaseGenerator
-from data.dataset import ZincNoSingleBondDataset, ZincYesSingleBondDataset, MosesNoSingleBondDataset, MosesYesSingleBondDataset
-from data.smilesstate import SmilesState
+from model.generator import BaseGenerator
+from data.dataset import ZincDataset, MosesDataset
+from data.data import TargetData
 from util import compute_sequence_cross_entropy, canonicalize
 
 
@@ -23,20 +25,13 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         self.sanity_checked = False
 
     def setup_datasets(self, hparams):
-        if hparams.dataset_name == "zinc_nosinglebond":
-            dataset_cls = ZincNoSingleBondDataset
-        elif hparams.dataset_name == "zinc_yessinglebond":
-            dataset_cls = ZincYesSingleBondDataset
-        elif hparams.dataset_name == "moses_nosinglebond":
-            dataset_cls = MosesNoSingleBondDataset
-        elif hparams.dataset_name == "moses_yessinglebond":
-            dataset_cls = MosesYesSingleBondDataset
-
+        dataset_cls = {"zinc": ZincDataset, "moses": MosesDataset}.get(hparams.dataset_name)
         self.train_dataset = dataset_cls("train")
         self.val_dataset = dataset_cls("valid")
+        self.train_smiles_set = set(self.train_dataset.smiles_list)
         self.tokenizer = self.train_dataset.tokenizer
 
-        self.collate = SmilesState.collate
+        self.collate = TargetData.collate
 
     def setup_model(self, hparams):
         self.model = BaseGenerator(
@@ -46,10 +41,6 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             hparams.nhead,
             hparams.dim_feedforward,
             hparams.dropout,
-            hparams.use_nodefeats,
-            hparams.use_linedistance,
-            hparams.use_distance,
-            hparams.use_isopen,
         )
 
     ### Dataloaders and optimizers
@@ -78,28 +69,10 @@ class BaseGeneratorLightningModule(pl.LightningModule):
     ### Main steps
     def shared_step(self, batched_data):
         loss, statistics = 0.0, dict()
-        (
-            token_sequences, 
-            tokentype_sequences, 
-            linedistance_squares, 
-            distance_squares, 
-            isopen_squares, 
-            degree_squares,
-            bondorder_squares,
-            _
-         ) = batched_data
 
         # decoding
-        logits = self.model(
-            token_sequences, 
-            tokentype_sequences, 
-            linedistance_squares, 
-            distance_squares, 
-            isopen_squares, 
-            degree_squares,
-            bondorder_squares,
-            )
-        recon_loss = compute_sequence_cross_entropy(logits, token_sequences)
+        logits = self.model(batched_data)
+        recon_loss = compute_sequence_cross_entropy(logits, batched_data[0])
         loss += recon_loss
 
         statistics["loss/total"] = loss
@@ -107,6 +80,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         return loss, statistics
 
     def training_step(self, batched_data, batch_idx):
+        self.sanity_checked = True
         loss, statistics = self.shared_step(batched_data)
         for key, val in statistics.items():
             self.log(f"train/{key}", val, on_step=True, logger=True)
@@ -121,21 +95,10 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         return loss
 
     def validation_epoch_end(self, outputs):
-        statistics = dict()
-
         num_samples = self.hparams.num_samples if self.sanity_checked else 2
-        maybe_smiles_list = []
-        while len(maybe_smiles_list) < num_samples: 
-            with torch.no_grad():
-                states = self.model.decode(
-                    self.hparams.sample_batch_size if self.sanity_checked else 2, 
-                    max_len=120 if self.sanity_checked else 10, 
-                    device=self.device
-                    )
+        max_len = 120 if self.sanity_checked else 10
+        maybe_smiles_list = self.sample(num_samples, max_len)
 
-            maybe_smiles_list += [state.get_smiles() for state in states]
-        
-        maybe_smiles_list = maybe_smiles_list[:num_samples]
         smiles_list = []
         for maybe_smiles in maybe_smiles_list:
             self.logger.experiment["smiles"].log(f"{self.current_epoch}, {maybe_smiles}")
@@ -146,19 +109,37 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             else:
                 smiles_list.append(smiles)
 
-        unique_smiles_list = list(set(smiles_list))
+        unique_smiles_set = set(smiles_list)
+        novel_smiles_set = unique_smiles_set - self.train_smiles_set
 
+        statistics = dict()
         statistics["sample/valid"] = float(len(smiles_list)) / num_samples
-        statistics["sample/unique"] = float(len(unique_smiles_list)) / len(smiles_list) if len(smiles_list) > 0 else 0.0
+        statistics["sample/unique"] = float(len(unique_smiles_set)) / num_samples if len(smiles_list) > 0 else 0.0
+        statistics["sample/novel"] = float(len(novel_smiles_set)) / num_samples if len(smiles_list) > 0 else 0.0
 
         for key, val in statistics.items():
             self.log(key, val, on_step=False, on_epoch=True, logger=True)
 
-        self.sanity_checked = True
+    def sample(self, num_samples, max_len, verbose=False):
+        maybe_smiles_list = []
+        while len(maybe_smiles_list) < num_samples: 
+            with torch.no_grad():
+                sample_batch_size = min(num_samples - len(maybe_smiles_list), self.hparams.sample_batch_size)
+                states = self.model.decode(
+                    sample_batch_size, 
+                    max_len=max_len, 
+                    device=self.device
+                    )
+
+            maybe_smiles_list += [state.get_smiles() for state in states]
+            if verbose:
+                print(f"{len(maybe_smiles_list)} / {num_samples}")
+        
+        return maybe_smiles_list
 
     @staticmethod
     def add_args(parser):
-        parser.add_argument("--dataset_name", type=str, default="moses_yessinglebond")
+        parser.add_argument("--dataset_name", type=str, default="moses")
 
         parser.add_argument("--num_encoder_layers", type=int, default=6)
         parser.add_argument("--emb_size", type=int, default=1024)
@@ -166,25 +147,22 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--dim_feedforward", type=int, default=2048)
         parser.add_argument("--dropout", type=int, default=0.1)
 
-        parser.add_argument("--use_nodefeats", action="store_true")
-        parser.add_argument("--use_linedistance", action="store_true")
-        parser.add_argument("--use_distance", action="store_true")
-        parser.add_argument("--use_isopen", action="store_true")
-
         parser.add_argument("--lr", type=float, default=1e-4)
         parser.add_argument("--batch_size", type=int, default=256)
         parser.add_argument("--num_workers", type=int, default=8)
 
+        parser.add_argument("--max_len", type=int, default=120)
         parser.add_argument("--num_samples", type=int, default=1024)
-        parser.add_argument("--sample_batch_size", type=int, default=256)
-
+        parser.add_argument("--sample_batch_size", type=int, default=256)        
+        parser.add_argument("--test_num_samples", type=int, default=30000)
+        
         return parser
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     BaseGeneratorLightningModule.add_args(parser)
-    parser.add_argument("--max_epochs", type=int, default=1000)
+    parser.add_argument("--max_epochs", type=int, default=10)
     parser.add_argument("--gradient_clip_val", type=float, default=0.5)
     parser.add_argument("--checkpoint_dir", type=str, default="../resource/checkpoint/default")
     parser.add_argument("--load_checkpoint_path", type=str, default="")
@@ -210,3 +188,8 @@ if __name__ == "__main__":
         gradient_clip_val=hparams.gradient_clip_val,
     )
     trainer.fit(model)
+
+    model.load_from_checkpoint(checkpoint_callback.best_model_path)
+    smiles_list = model.sample(30000, hparams.max_len, verbose=True)
+    smiles_list_path = os.path.join(hparams.checkpoint_dir, "test.txt")
+    Path(smiles_list_path).write_text("\n".join(smiles_list))
