@@ -180,7 +180,7 @@ class BaseTranslatorLightningModule(pl.LightningModule):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     BaseTranslatorLightningModule.add_args(parser)
-    parser.add_argument("--max_epochs", type=int, default=100)
+    parser.add_argument("--max_epochs", type=int, default=500)
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--gradient_clip_val", type=float, default=0.5)
     parser.add_argument("--checkpoint_dir", type=str, default="../resource/checkpoint/default")
