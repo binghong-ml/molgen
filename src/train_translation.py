@@ -105,7 +105,8 @@ class BaseTranslatorLightningModule(pl.LightningModule):
             self.log(f"train/{key}", val, on_step=True, logger=True)
 
         return loss
-        
+    
+    
     def validation_step(self, batched_data, batch_idx):
         statistics = dict()
         src, src_smiles_list = batched_data
@@ -113,21 +114,17 @@ class BaseTranslatorLightningModule(pl.LightningModule):
 
         with torch.no_grad():
             tgt_data_list = self.model.decode(src, max_len=max_len, device=self.device)
-        
-        smiles_path = os.path.join(self.hparams.checkpoint_dir, f"valid_pairs_epoch={self.current_epoch}.txt")
+
+            
         smiles_list = []
         for tgt_data, src_smiles in zip(tgt_data_list, src_smiles_list):        
             maybe_smiles = tgt_data.get_smiles()
-            if canonicalize(maybe_smiles) is None and self.sanity_checked:
-                self.logger.experiment["invalid_smiles"].log(f"{self.current_epoch}, {src_smiles}, {maybe_smiles}")
+            if canonicalize(maybe_smiles) is None:
+                if self.sanity_checked:
+                    self.logger.experiment["invalid_smiles"].log(f"{self.current_epoch}, {src_smiles}, {maybe_smiles}")
             else:
                 smiles_list.append(maybe_smiles)
-            
-            if self.sanity_checked:
-                with Path(smiles_path).open('a') as fp:
-                    fp.write(f'{src_smiles}, {maybe_smiles}\n')           
-            
-        
+
         statistics["validation/valid"] = float(len(smiles_list)) / src[0].size(0)
         statistics["validation/unique"] = (
             float(len(set(smiles_list))) / len(smiles_list) if len(smiles_list) > 0 else 0.0
