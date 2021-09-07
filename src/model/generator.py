@@ -84,8 +84,8 @@ class BaseGenerator(nn.Module):
         if self.use_linedistance:
             arange_tsr = torch.arange(sequence_len)
             distance_squares = torch.abs(arange_tsr.unsqueeze(0) - arange_tsr.unsqueeze(1))
-            distance_squares = distance_squares.view(1, 1, sequence_len, sequence_len)
-            distance_squares = distance_squares.repeat(batch_size, self.nhead, 1, 1)
+            distance_squares = distance_squares.view(1, sequence_len, sequence_len)
+            distance_squares = distance_squares.repeat(batch_size, 1, 1)
             distance_squares = distance_squares.to(out.device)
             distance_squares[distance_squares > 199] = 199
 

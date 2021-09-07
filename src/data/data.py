@@ -268,7 +268,7 @@ class TargetData(SourceData):
             anchor = tokenidx - 1
             
             #
-            if self.tokens[anchor] == "<bos>":
+            if self.tokens[anchor] != "<bos>":
                 self.graph.add_edge(anchor, tokenidx, w=1)
 
             #
