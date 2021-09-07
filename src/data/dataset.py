@@ -17,20 +17,63 @@ from data.data import TargetData, SourceData
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+DATA_DIR = "../resource/data"
+TOKENIZER_PATH = f"{DATA_DIR}/tokenizer.json"
+ALL_PATHS = [
+    f"{DATA_DIR}/zinc/raw/train.txt", 
+    f"{DATA_DIR}/zinc/raw/valid.txt", 
+    f"{DATA_DIR}/zinc/raw/test.txt", 
+    f"{DATA_DIR}/moses/raw/train.txt", 
+    f"{DATA_DIR}/moses/raw/valid.txt", 
+    f"{DATA_DIR}/moses/raw/test.txt",
+    f"{DATA_DIR}/logp04/raw/train_pairs.txt", 
+    f"{DATA_DIR}/logp04/raw/valid.txt", 
+    f"{DATA_DIR}/logp04/raw/test.txt",
+    f"{DATA_DIR}/logp06/raw/train_pairs.txt", 
+    f"{DATA_DIR}/logp06/raw/valid.txt", 
+    f"{DATA_DIR}/logp06/raw/test.txt", 
+    f"{DATA_DIR}/drd2/raw/train_pairs.txt", 
+    f"{DATA_DIR}/drd2/raw/valid.txt", 
+    f"{DATA_DIR}/drd2/raw/test.txt",
+    f"{DATA_DIR}/qed/raw/train_pairs.txt", 
+    f"{DATA_DIR}/qed/raw/valid.txt", 
+    f"{DATA_DIR}/qed/raw/test.txt",
+    ]
+
+def load_tokenizer():
+    if not os.path.exists(TOKENIZER_PATH):
+        setup_tokenizer()
+
+    return Tokenizer.from_file(TOKENIZER_PATH)
+
+
+def setup_tokenizer():
+    all_smiles_list = []
+    for smiles_list_path in ALL_PATHS:
+        smiles_list = Path(smiles_list_path).read_text(encoding="utf-8").splitlines()
+        smiles_list = [smiles for elem in smiles_list for smiles in elem.split(", ")]
+        all_smiles_list += smiles_list
+            
+    all_tokens_list = Parallel(n_jobs=8)(delayed(tokenize_with_singlebond)(smiles) for smiles in all_smiles_list)
+
+    tokenizer = Tokenizer(WordLevel())
+    tokenizer.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
+    trainer = WordLevelTrainer(vocab_size=40000, special_tokens=["<pad>", "<mask>", "<bos>", "<eos>"])
+    tokenizer.train_from_iterator(iter(all_tokens_list), trainer)
+    tokenizer.post_processor = TemplateProcessing(
+        single="<bos> $A <eos>",
+        special_tokens=[("<bos>", tokenizer.token_to_id("<bos>")), ("<eos>", tokenizer.token_to_id("<eos>")),],
+    )
+    tokenizer.save(TOKENIZER_PATH)
 
 class ZincDataset(Dataset):
-    raw_dir = "../resource/data/zinc/raw"
-    vocab_raw_dir = "../resource/data/zinc/raw"
-    vocab_dir = "../resource/data/zinc/processed"
+    raw_dir = f"{DATA_DIR}/zinc/raw"
+    vocab_raw_dir = f"{DATA_DIR}/zinc/raw"
+    vocab_dir = f"{DATA_DIR}/zinc/processed"
     def __init__(self, split):
         smiles_list_path = os.path.join(self.raw_dir, f"{split}.txt")
         self.smiles_list = Path(smiles_list_path).read_text(encoding="utf=8").splitlines()
-
-        tokenizer_path = os.path.join(self.vocab_dir, "tokenizer.json")
-        if not os.path.exists(tokenizer_path) or not os.path.exists(tokenizer_path):
-            self.setup()
-
-        self.tokenizer = Tokenizer.from_file(tokenizer_path)
+        self.tokenizer = load_tokenizer()
 
     def __len__(self):
         return len(self.smiles_list)
@@ -40,27 +83,6 @@ class ZincDataset(Dataset):
         string = self.smiles2string(smiles)
         tokens = self.tokenizer.decode(self.tokenizer.encode(string).ids, skip_special_tokens=False).split(" ")
         return TargetData(tokens).featurize(self.tokenizer)
-
-    def setup(self):
-        os.makedirs(self.vocab_dir, exist_ok=True)
-        all_tokens_list = []
-        for split in ["train", "valid", "test"]:
-            smiles_list_path = os.path.join(self.vocab_raw_dir, f"{split}.txt")
-            smiles_list = Path(smiles_list_path).read_text(encoding="utf-8").splitlines()
-            tokens_list = Parallel(n_jobs=8)(delayed(tokenize_with_singlebond)(smiles) for smiles in smiles_list)
-            all_tokens_list += tokens_list
-
-        #
-        tokenizer = Tokenizer(WordLevel())
-        tokenizer.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
-        trainer = WordLevelTrainer(vocab_size=40000, special_tokens=["<pad>", "<mask>", "<bos>", "<eos>"])
-        tokenizer.train_from_iterator(iter(all_tokens_list), trainer)
-        tokenizer.post_processor = TemplateProcessing(
-            single="<bos> $A <eos>",
-            special_tokens=[("<bos>", tokenizer.token_to_id("<bos>")), ("<eos>", tokenizer.token_to_id("<eos>")),],
-        )
-        os.makedirs(self.vocab_dir, exist_ok=True)
-        tokenizer.save(os.path.join(self.vocab_dir, "tokenizer.json"))
 
     def smiles2string(self, smiles):
         mol = Chem.MolFromSmiles(smiles)
@@ -77,14 +99,14 @@ class ZincAutoEncoderDataset(ZincDataset):
         return SourceData(src_tokens).featurize(self.tokenizer), TargetData(tgt_tokens).featurize(self.tokenizer)
 
 class MosesDataset(ZincDataset):
-    raw_dir = "../resource/data/moses/raw"
-    vocab_raw_dir = "../resource/data/moses/raw"
-    vocab_dir = "../resource/data/moses/processed"
+    raw_dir = f"{DATA_DIR}/moses/raw"
+    vocab_raw_dir = f"{DATA_DIR}/moses/raw"
+    vocab_dir = f"{DATA_DIR}/moses/processed"
 
 class LogP04Dataset(Dataset):
-    raw_dir = "../resource/data/logp04/raw"
-    vocab_raw_dir = "../resource/data/zinc/raw"
-    vocab_dir = "../resource/data/zinc/processed"
+    raw_dir = f"{DATA_DIR}/logp04/raw"
+    vocab_raw_dir = f"{DATA_DIR}/logp04/raw"
+    vocab_dir = f"{DATA_DIR}/logp04/processed"
     def __init__(self, split):
         self.split = split
         if self.split == "train":
@@ -97,11 +119,7 @@ class LogP04Dataset(Dataset):
             smiles_list_path = os.path.join(self.raw_dir, f"{self.split}.txt")
             self.smiles_list = Path(smiles_list_path).read_text(encoding="utf=8").splitlines()
 
-        tokenizer_path = os.path.join(self.vocab_dir, "tokenizer.json")
-        if not os.path.exists(tokenizer_path) or not os.path.exists(tokenizer_path):
-            self.setup()
-
-        self.tokenizer = Tokenizer.from_file(tokenizer_path)
+        self.tokenizer = load_tokenizer()
 
     def __len__(self):
         if self.split == "train":
@@ -138,16 +156,16 @@ class LogP04Dataset(Dataset):
         return tokenize(smiles)
 
 class LogP06Dataset(LogP04Dataset):
-    raw_dir = "../resource/data/logp06/raw"
-    vocab_raw_dir = "../resource/data/zinc/raw"
-    vocab_dir = "../resource/data/zinc/processed"
+    raw_dir = f"{DATA_DIR}/logp06/raw"
+    vocab_raw_dir = f"{DATA_DIR}/logp06/raw"
+    vocab_dir = f"{DATA_DIR}/logp06/processed"
 
 class DRD2Dataset(LogP04Dataset):
-    raw_dir = "../resource/data/drd2/raw"
-    vocab_raw_dir = "../resource/data/zinc/raw"
-    vocab_dir = "../resource/data/zinc/processed"
+    raw_dir = f"{DATA_DIR}/drd2/raw"
+    vocab_raw_dir = f"{DATA_DIR}/drd2/raw"
+    vocab_dir = f"{DATA_DIR}/drd2/processed"
 
 class QEDDataset(LogP04Dataset):
-    raw_dir = "../resource/data/qed/raw"
-    vocab_raw_dir = "../resource/data/zinc/raw"
-    vocab_dir = "../resource/data/zinc/processed"
+    raw_dir = f"{DATA_DIR}/qed/raw"
+    vocab_raw_dir = f"{DATA_DIR}/qed/raw"
+    vocab_dir = f"{DATA_DIR}/qed/processed"

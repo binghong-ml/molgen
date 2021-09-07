@@ -1,3 +1,4 @@
+from collections import defaultdict
 import os
 import argparse
 from joblib import Parallel, delayed
@@ -33,7 +34,9 @@ class BaseTranslatorLightningModule(pl.LightningModule):
             "qed": QEDDataset
         }.get(self.hparams.dataset_name)
         self.train_dataset = dataset_cls("train")
-        self.val_dataset = dataset_cls("test")
+        self.val_dataset = dataset_cls("valid")
+        self.test_dataset = dataset_cls("test")
+        
         self.tokenizer = self.train_dataset.tokenizer
 
         def train_collate(data_list):
@@ -80,6 +83,15 @@ class BaseTranslatorLightningModule(pl.LightningModule):
             num_workers=self.hparams.num_workers,
         )
 
+    def test_dataloader(self):
+        return DataLoader(
+            self.test_dataset,
+            batch_size=self.hparams.batch_size,
+            shuffle=False,
+            collate_fn=self.eval_collate,
+            num_workers=self.hparams.num_workers,
+        )
+
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.hparams.lr)
         return [optimizer]
@@ -114,7 +126,6 @@ class BaseTranslatorLightningModule(pl.LightningModule):
 
         with torch.no_grad():
             tgt_data_list = self.model.decode(src, max_len=max_len, device=self.device)
-
             
         smiles_list = []
         for tgt_data, src_smiles in zip(tgt_data_list, src_smiles_list):        
@@ -131,6 +142,21 @@ class BaseTranslatorLightningModule(pl.LightningModule):
         )
         for key, val in statistics.items():
             self.log(key, val, on_step=False, on_epoch=True, logger=True)
+
+    def test_step(self, batched_data, batch_idx):
+        src, src_smiles_list = batched_data
+        src_smiles2tgt_smiles_list = defaultdict(list)
+        for _ in range(20):
+            with torch.no_grad():
+                tgt_data_list = self.model.decode(src, max_len=120, device=self.device)
+
+            for src_smiles, tgt_data in zip(src_smiles_list, tgt_data_list):
+                src_smiles2tgt_smiles_list[src_smiles].append(tgt_data.get_smiles())
+        
+        dict_path = os.path.join(self.hparams.checkpoint_dir, "test_pairs.txt")
+        for src_smiles in src_smiles_list:
+            with Path(dict_path).open("a") as fp:
+                fp.write(", ".join([src_smiles] + src_smiles2tgt_smiles_list[src_smiles]) + "\n")
 
     @staticmethod
     def add_args(parser):
@@ -155,6 +181,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     BaseTranslatorLightningModule.add_args(parser)
     parser.add_argument("--max_epochs", type=int, default=100)
+    parser.add_argument("--debug", action="store_true")
     parser.add_argument("--gradient_clip_val", type=float, default=0.5)
     parser.add_argument("--checkpoint_dir", type=str, default="../resource/checkpoint/default")
     parser.add_argument("--load_checkpoint_path", type=str, default="")
@@ -165,18 +192,31 @@ if __name__ == "__main__":
     if hparams.load_checkpoint_path != "":
         model.load_from_checkpoint(hparams.load_checkpoint_path)
 
-    neptune_logger = NeptuneLogger(project="sungsahn0215/molgen", close_after_fit=False)
-    neptune_logger.run["params"] = vars(hparams)
-    neptune_logger.run["sys/tags"].add(hparams.tag.split("_"))
-    checkpoint_callback = ModelCheckpoint(
-        dirpath=os.path.join("../resource/checkpoint/", hparams.tag), monitor="validation/valid", mode="max",
-    )
+    if not hparams.debug:
+        logger = NeptuneLogger(project="sungsahn0215/molgen", close_after_fit=False)
+        logger.run["params"] = vars(hparams)
+        logger.run["sys/tags"].add(hparams.tag.split("_"))
+    else:
+        logger = None
+    
+    callbacks = []
+    if not hparams.debug:
+        checkpoint_callback = ModelCheckpoint(
+            dirpath=os.path.join("../resource/checkpoint/", hparams.tag), monitor="validation/valid", mode="max",
+        )
+        callbacks.append(checkpoint_callback)
+
     trainer = pl.Trainer(
         gpus=1,
-        logger=neptune_logger,
+        logger=logger,
         default_root_dir="../resource/log/",
         max_epochs=hparams.max_epochs,
-        callbacks=[checkpoint_callback],
+        callbacks=callbacks,
         gradient_clip_val=hparams.gradient_clip_val,
     )
     trainer.fit(model)
+
+    if hparams.max_epochs > 0:
+        model.load_from_checkpoint(trainer.checkpoint_callback.best_model_path)
+        
+    trainer.test(model)
