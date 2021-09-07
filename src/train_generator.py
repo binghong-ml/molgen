@@ -9,6 +9,8 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
 from neptune.new.integrations.pytorch_lightning import NeptuneLogger
 
+import moses
+
 from model.generator import BaseGenerator
 from data.dataset import ZincDataset, MosesDataset
 from data.data import TargetData
@@ -193,3 +195,8 @@ if __name__ == "__main__":
     smiles_list = model.sample(30000, hparams.max_len, verbose=True)
     smiles_list_path = os.path.join(hparams.checkpoint_dir, "test.txt")
     Path(smiles_list_path).write_text("\n".join(smiles_list))
+
+    metrics = moses.get_all_metrics(smiles_list, n_jobs=8, device="cuda:0")
+    print(metrics)
+    for key in metrics:
+        neptune_logger.experiment[f"moses/{key}"] = metrics[key]

@@ -14,7 +14,6 @@ from model.translator import BaseTranslator
 from data.dataset import MosesAutoEncoderDataset, ZincAutoEncoderDataset
 from data.data import SourceData, TargetData
 from util import compute_sequence_cross_entropy, compute_sequence_accuracy, canonicalize
-from score import _raw_plogp_improvement
 
 class BaseTranslatorLightningModule(pl.LightningModule):
     def __init__(self, hparams):
