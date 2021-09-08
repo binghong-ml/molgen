@@ -46,7 +46,8 @@ class BaseTranslatorLightningModule(pl.LightningModule):
             hparams.nhead,
             hparams.dim_feedforward,
             hparams.dropout,
-        )
+            hparams.use_linedistance,
+            )
 
     ### Dataloaders and optimizers
     def train_dataloader(self):
@@ -114,13 +115,14 @@ class BaseTranslatorLightningModule(pl.LightningModule):
         parser.add_argument("--nhead", type=int, default=8)
         parser.add_argument("--dim_feedforward", type=int, default=2048)
         parser.add_argument("--dropout", type=int, default=0.1)
+        parser.add_argument("--use_linedistance", action="store_true")
 
         parser.add_argument("--lr", type=float, default=1e-4)
         parser.add_argument("--batch_size", type=int, default=64)
         parser.add_argument("--num_workers", type=int, default=8)
 
         parser.add_argument("--num_repeats", type=int, default=20)
-
+        
         return parser
 
 

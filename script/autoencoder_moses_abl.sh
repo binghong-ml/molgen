@@ -2,4 +2,5 @@
 
 python train_autoencoder.py \
 --dataset_name moses \
---tag autoencoder_moses
+--use_linedistance \
+--tag autoencoder_moses_linedistance

@@ -25,7 +25,7 @@ def get_score(smile):
 
     mol = Chem.MolFromSmiles(smile)
     if mol:
-        fp = fingerprints_from_mol(mol)
+        fp = fingerprints_from_mol(mol)   
         score = clf_model.predict_proba(fp)[:, 1]
         return float(score)
     return 0.0

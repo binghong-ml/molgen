@@ -62,6 +62,7 @@ class BaseTranslatorLightningModule(pl.LightningModule):
             hparams.nhead,
             hparams.dim_feedforward,
             hparams.dropout,
+            False
         )
 
     ### Dataloaders and optimizers
@@ -77,7 +78,7 @@ class BaseTranslatorLightningModule(pl.LightningModule):
     def val_dataloader(self):
         return DataLoader(
             self.val_dataset,
-            batch_size=self.hparams.batch_size,
+            batch_size=self.hparams.eval_batch_size,
             shuffle=False,
             collate_fn=self.eval_collate,
             num_workers=self.hparams.num_workers,
@@ -86,7 +87,7 @@ class BaseTranslatorLightningModule(pl.LightningModule):
     def test_dataloader(self):
         return DataLoader(
             self.test_dataset,
-            batch_size=self.hparams.batch_size,
+            batch_size=self.hparams.eval_batch_size,
             shuffle=False,
             collate_fn=self.eval_collate,
             num_workers=self.hparams.num_workers,
@@ -146,12 +147,19 @@ class BaseTranslatorLightningModule(pl.LightningModule):
     def test_step(self, batched_data, batch_idx):
         src, src_smiles_list = batched_data
         src_smiles2tgt_smiles_list = defaultdict(list)
-        for _ in range(20):
+        invalid = 0
+        for _ in range(self.hparams.num_repeats):
             with torch.no_grad():
                 tgt_data_list = self.model.decode(src, max_len=self.hparams.max_len, device=self.device)
 
             for src_smiles, tgt_data in zip(src_smiles_list, tgt_data_list):
-                src_smiles2tgt_smiles_list[src_smiles].append(tgt_data.get_smiles())
+                maybe_smiles = tgt_data.get_smiles()
+                if canonicalize(maybe_smiles) is None:
+                    invalid += 1
+
+                src_smiles2tgt_smiles_list[src_smiles].append(maybe_smiles)
+
+        print(float(invalid) / self.hparams.num_repeats / src[0].size(0))
         
         dict_path = os.path.join(self.hparams.checkpoint_dir, "test_pairs.txt")
         for src_smiles in src_smiles_list:
@@ -170,6 +178,7 @@ class BaseTranslatorLightningModule(pl.LightningModule):
 
         parser.add_argument("--lr", type=float, default=1e-4)
         parser.add_argument("--batch_size", type=int, default=64)
+        parser.add_argument("--eval_batch_size", type=int, default=256)
         parser.add_argument("--num_workers", type=int, default=8)
 
         parser.add_argument("--num_repeats", type=int, default=20)
@@ -190,8 +199,8 @@ if __name__ == "__main__":
     hparams = parser.parse_args()
 
     model = BaseTranslatorLightningModule(hparams)
-    if hparams.load_checkpoint_path != "":
-        model.load_from_checkpoint(hparams.load_checkpoint_path)
+    #if hparams.load_checkpoint_path != "":
+    model.load_state_dict(torch.load(hparams.load_checkpoint_path)["state_dict"])
 
     if not hparams.debug:
         logger = NeptuneLogger(project="sungsahn0215/molgen", close_after_fit=False)
@@ -217,5 +226,6 @@ if __name__ == "__main__":
 
     if hparams.max_epochs > 0:
         model.load_from_checkpoint(trainer.checkpoint_callback.best_model_path)
-        
+    
+    model.eval()
     trainer.test(model)

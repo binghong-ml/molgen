@@ -7,12 +7,17 @@ import networkx as nx
 import props.sascorer as sascorer
 import props.drd2_scorer as drd2_scorer
 
+from rdkit.rdBase import BlockLogs
+
 def safe_decorator(func):
     def safe_wrapper(*args):
+        block = BlockLogs()
         try:
             return func(*args)
         except:
             return None
+        
+        del block
     
     return safe_wrapper
 

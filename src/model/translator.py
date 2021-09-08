@@ -89,6 +89,7 @@ class BaseDecoder(nn.Module):
         nhead,
         dim_feedforward,
         dropout,
+        use_linedistance,
     ):
         super(BaseDecoder, self).__init__()
         self.nhead = nhead
@@ -103,6 +104,7 @@ class BaseDecoder(nn.Module):
         self.input_dropout = nn.Dropout(dropout)
 
         #
+        self.use_linedistance = use_linedistance
         self.distance_embedding_layer = nn.Embedding(200, nhead)
         self.isopen_embedding_layer = nn.Embedding(2, nhead)
 
@@ -124,6 +126,14 @@ class BaseDecoder(nn.Module):
         out = self.input_dropout(out)
 
         #
+        if self.use_linedistance:
+            arange_tsr = torch.arange(sequence_len)
+            distance_squares = torch.abs(arange_tsr.unsqueeze(0) - arange_tsr.unsqueeze(1))
+            distance_squares = distance_squares.view(1, sequence_len, sequence_len)
+            distance_squares = distance_squares.repeat(batch_size, 1, 1)
+            distance_squares = distance_squares.to(out.device)
+            distance_squares[distance_squares > 199] = 199
+
         mask = self.distance_embedding_layer(distance_squares).permute(0, 3, 1, 2)
         mask += self.isopen_embedding_layer(isopen_squares).permute(0, 3, 1, 2)
         bool_mask = (torch.triu(torch.ones((sequence_len, sequence_len))) == 1).transpose(0, 1)
@@ -157,6 +167,7 @@ class BaseTranslator(nn.Module):
         nhead,
         dim_feedforward,
         dropout, 
+        use_linedistance,
     ):
         super(BaseTranslator, self).__init__()
         self.tokenizer = tokenizer
@@ -168,6 +179,7 @@ class BaseTranslator(nn.Module):
             nhead,
             dim_feedforward, 
             dropout, 
+            use_linedistance
         )
 
     def forward(self, src, tgt):
