@@ -3,6 +3,7 @@ import argparse
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 import pytorch_lightning as pl
@@ -12,10 +13,8 @@ from neptune.new.integrations.pytorch_lightning import NeptuneLogger
 import moses
 
 from model.generator import BaseGenerator
-from data.dataset import ZincDataset, MosesDataset, PolymerDataset
-from data.data import TargetData
-from util import compute_sequence_cross_entropy, canonicalize
-
+from data.dataset import ZincDataset, MosesDataset, PolymerDataset, collate
+from data.util import node_feature_names, edge_feature_names
 
 class BaseGeneratorLightningModule(pl.LightningModule):
     def __init__(self, hparams):
@@ -32,19 +31,19 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         self.val_dataset = dataset_cls("valid")
         self.test_dataset = dataset_cls("test")
         self.train_smiles_set = set(self.train_dataset.smiles_list)
-        self.tokenizer = self.train_dataset.tokenizer
-
-        self.collate = TargetData.collate
+        
+        self.collate = collate
 
     def setup_model(self, hparams):
         self.model = BaseGenerator(
-            self.tokenizer,
             hparams.num_encoder_layers,
+            hparams.num_decoder_layers,
             hparams.emb_size,
             hparams.nhead,
             hparams.dim_feedforward,
             hparams.dropout,
-            hparams.use_linedistance,
+            hparams.logit_hidden_dim,
+            hparams.vq_vocab_size,
         )
 
     ### Dataloaders and optimizers
@@ -75,13 +74,48 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         loss, statistics = 0.0, dict()
 
         # decoding
-        logits = self.model(batched_data)
-        recon_loss = compute_sequence_cross_entropy(logits, batched_data[0])
-        loss += recon_loss
+        batched_node_data, batched_edge_data = batched_data
+        node_logits, edge_logits, vq_loss = self.model(batched_node_data, batched_edge_data)
+            
+        statistics[f"loss/vq"] = vq_loss
 
-        statistics["loss/total"] = loss
+        correct_total = 1.0
+        loss_total = 0.0
+        loss_total += 0.01 * vq_loss
+        for key in node_feature_names + edge_feature_names:
+            if key in node_feature_names:
+                batch_size = node_logits[key].size(0)
+                logits = node_logits[key].reshape(-1, node_logits[key].size(-1))
+                targets = batched_node_data[key].reshape(-1)
+            else:
+                batch_size = edge_logits[key].size(0)
+                logits = edge_logits[key].reshape(-1, edge_logits[key].size(-1))
+                targets = batched_edge_data[key].reshape(-1)
 
-        return loss, statistics
+            loss = F.cross_entropy(logits, targets, ignore_index=0) 
+            
+            preds = torch.argmax(logits, -1)
+            correct = preds == targets
+            correct[targets == 0] = True
+            elem_acc = correct[targets != 0].float().mean()
+            sequence_acc = correct.view(batch_size, -1).all(dim=1).float().mean()
+            
+            correct_total = correct_total * correct.view(batch_size, -1).all(dim=1).float()
+            if key in node_feature_names:
+                statistics[f"loss/node_{key}"] = loss
+                statistics[f"elem_acc/node_{key}"] = elem_acc 
+                statistics[f"seq_acc/node_{key}"] = sequence_acc
+            else:
+                statistics[f"loss/edge_{key}"] = loss
+                statistics[f"elem_acc/edge_{key}"] = elem_acc 
+                statistics[f"seq_acc/edge_{key}"] = sequence_acc
+
+            loss_total += loss
+
+        statistics["loss/total"] = loss_total
+        statistics["acc/total"] = correct_total.mean()
+
+        return loss_total, statistics
 
     def training_step(self, batched_data, batch_idx):
         self.sanity_checked = True
@@ -98,69 +132,23 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
         return loss
 
-    def validation_epoch_end(self, outputs):
-        num_samples = self.hparams.num_samples if self.sanity_checked else 2
-        max_len = self.hparams.max_len if self.sanity_checked else 10
-        maybe_smiles_list = self.sample(num_samples, max_len)
-
-        smiles_list = []
-        for maybe_smiles in maybe_smiles_list:
-            self.logger.experiment["smiles"].log(f"{self.current_epoch}, {maybe_smiles}")
-            
-            smiles = canonicalize(maybe_smiles)
-            if smiles is None:
-                self.logger.experiment["invalid_smiles"].log(f"{self.current_epoch}, {maybe_smiles}")
-            else:
-                smiles_list.append(smiles)
-
-        unique_smiles_set = set(smiles_list)
-        novel_smiles_set = unique_smiles_set - self.train_smiles_set
-
-        statistics = dict()
-        statistics["sample/valid"] = float(len(smiles_list)) / num_samples
-        statistics["sample/unique"] = float(len(unique_smiles_set)) / num_samples if len(smiles_list) > 0 else 0.0
-        statistics["sample/novel"] = float(len(novel_smiles_set)) / num_samples if len(smiles_list) > 0 else 0.0
-
-        for key, val in statistics.items():
-            self.log(key, val, on_step=False, on_epoch=True, logger=True)
-
-    def sample(self, num_samples, max_len, verbose=False):
-        maybe_smiles_list = []
-        while len(maybe_smiles_list) < num_samples: 
-            with torch.no_grad():
-                sample_batch_size = min(num_samples - len(maybe_smiles_list), self.hparams.sample_batch_size)
-                states = self.model.decode(
-                    sample_batch_size, 
-                    max_len=max_len, 
-                    device=self.device
-                    )
-
-            maybe_smiles_list += [state.get_smiles() for state in states]
-            if verbose:
-                print(f"{len(maybe_smiles_list)} / {num_samples}")
-        
-        return maybe_smiles_list
-
     @staticmethod
     def add_args(parser):
-        parser.add_argument("--dataset_name", type=str, default="moses")
+        parser.add_argument("--dataset_name", type=str, default="zinc")
 
         parser.add_argument("--num_encoder_layers", type=int, default=6)
+        parser.add_argument("--num_decoder_layers", type=int, default=6)
         parser.add_argument("--emb_size", type=int, default=1024)
         parser.add_argument("--nhead", type=int, default=8)
         parser.add_argument("--dim_feedforward", type=int, default=2048)
-        parser.add_argument("--dropout", type=int, default=0.1)
-        parser.add_argument("--use_linedistance", action="store_true")
+        parser.add_argument("--dropout", type=float, default=0.1)
+        parser.add_argument("--logit_hidden_dim", type=int, default=256)
+        parser.add_argument("--vq_vocab_size", type=int, default=8192)
 
-        parser.add_argument("--lr", type=float, default=1e-4)
+        parser.add_argument("--lr", type=float, default=1e-6)
         parser.add_argument("--batch_size", type=int, default=256)
         parser.add_argument("--num_workers", type=int, default=8)
 
-        parser.add_argument("--max_len", type=int, default=250)
-        parser.add_argument("--num_samples", type=int, default=1024)
-        parser.add_argument("--sample_batch_size", type=int, default=256)
-        parser.add_argument("--test_num_samples", type=int, default=30000)
-        
         return parser
 
 if __name__ == "__main__":
@@ -174,7 +162,8 @@ if __name__ == "__main__":
     hparams = parser.parse_args()
 
     model = BaseGeneratorLightningModule(hparams)
-    model.load_state_dict(torch.load(hparams.load_checkpoint_path)["state_dict"])
+    if hparams.load_checkpoint_path != "":
+        model.load_state_dict(torch.load(hparams.load_checkpoint_path)["state_dict"])
 
     neptune_logger = NeptuneLogger(project="sungsahn0215/molgen", close_after_fit=False)
     neptune_logger.run["params"] = vars(hparams)
@@ -191,13 +180,3 @@ if __name__ == "__main__":
         gradient_clip_val=hparams.gradient_clip_val,
     )
     trainer.fit(model)
-
-    #model.load_from_checkpoint(checkpoint_callback.best_model_path)
-    smiles_list = model.sample(hparams.test_num_samples, hparams.max_len, verbose=True)
-    smiles_list_path = os.path.join(hparams.checkpoint_dir, "test.txt")
-    Path(smiles_list_path).write_text("\n".join(smiles_list))
-
-    metrics = moses.get_all_metrics(smiles_list, n_jobs=8, device="cuda:0", test=model.test_dataset.smiles_list)
-    print(metrics)
-    for key in metrics:
-        neptune_logger.experiment[f"moses/{key}"] = metrics[key]

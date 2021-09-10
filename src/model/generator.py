@@ -1,10 +1,12 @@
-from data.data import TargetData
 import torch
 import torch.nn as nn
 
 import math
 
 from tqdm import tqdm
+
+from model.vectorquantization import VectorQuantization
+from data.util import allowable_features, node_feature_names, edge_feature_names
 
 # helper Module that adds positional encoding to the token embedding to introduce a notion of word order.
 class AbsolutePositionalEncoding(nn.Module):
@@ -31,101 +33,112 @@ class TokenEmbedding(nn.Module):
         self.emb_size = emb_size
 
     def forward(self, tokens):
-        return self.embedding(tokens.long()) * math.sqrt(self.emb_size)
+        return self.embedding(tokens) * math.sqrt(self.emb_size)
 
+class EdgeLogitLayer(nn.Module):
+    def __init__(self, emb_size, hidden_dim, vocab_size):
+        super(EdgeLogitLayer, self).__init__()
+        self.vocab_size = vocab_size
+        self.hidden_dim = hidden_dim
+        self.scale = hidden_dim ** -0.5
+        self.linear0 = nn.Linear(emb_size, vocab_size * self.hidden_dim)
+        self.linear1 = nn.Linear(emb_size, vocab_size * self.hidden_dim)
+
+    def forward(self, x):
+        batch_size = x.size(0)
+        seq_len = x.size(1)
+        out0 = self.linear0(x).view(batch_size, seq_len, self.vocab_size, self.hidden_dim)
+        out1 = self.linear1(x).view(batch_size, seq_len, self.vocab_size, self.hidden_dim)
+        
+        out0 = out0.permute(0, 2, 1, 3).reshape(-1, seq_len, self.hidden_dim)
+        out1 = out1.permute(0, 2, 3, 1).reshape(-1, self.hidden_dim, seq_len)
+        logits = self.scale * torch.bmm(out0, out1).view(batch_size, self.vocab_size, seq_len, seq_len)
+        logits = logits.permute(0, 2, 3, 1)
+
+        return logits
 
 class BaseGenerator(nn.Module):
     def __init__(
         self,
-        tokenizer,
         num_encoder_layers,
+        num_decoder_layers,
         emb_size,
         nhead,
         dim_feedforward,
         dropout,
-        use_linedistance,
+        logit_hidden_dim,
+        vq_vocab_size,
     ):
         super(BaseGenerator, self).__init__()
         self.nhead = nhead
-        self.tokenizer = tokenizer
-        vocab_size = self.tokenizer.get_vocab_size()
 
         #
-        self.tok_emb = TokenEmbedding(vocab_size, emb_size)
         self.pos_emb = AbsolutePositionalEncoding(emb_size)
         
+        self.node_emb_dict = nn.ModuleDict(
+            {key: TokenEmbedding(len(allowable_features[key]), emb_size) for key in node_feature_names}
+            )
+        self.edge_emb_dict = nn.ModuleDict(
+            {key: TokenEmbedding(len(allowable_features[key]), nhead) for key in edge_feature_names}
+            )
+
         #
         self.input_dropout = nn.Dropout(dropout)
 
         #
-        self.use_linedistance = use_linedistance
-        self.distance_embedding_layer = nn.Embedding(200, nhead)
-        self.isopen_embedding_layer = nn.Embedding(2, nhead)
-
-        #
         encoder_layer = nn.TransformerEncoderLayer(emb_size, nhead, dim_feedforward, dropout, "gelu")
         encoder_norm = nn.LayerNorm(emb_size)
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
 
         #
-        self.generator = nn.Linear(emb_size, vocab_size)
+        decoder_layer = nn.TransformerEncoderLayer(emb_size, nhead, dim_feedforward, dropout, "gelu")
+        decoder_norm = nn.LayerNorm(emb_size)
+        self.decoder = nn.TransformerEncoder(decoder_layer, num_decoder_layers, decoder_norm)
 
-    def forward(self, tgt):
-        sequences, distance_squares, isopen_squares, _ = tgt        
-        batch_size = sequences.size(0)
-        sequence_len = sequences.size(1)
-        sequences = sequences.transpose(0, 1)
+        #
+        self.vq_layer = VectorQuantization(emb_size, vq_vocab_size)
+
+        #
+        self.node_generator_dict = nn.ModuleDict(
+            {key: nn.Linear(emb_size, len(allowable_features[key])) for key in node_feature_names}
+        )
+        self.edge_generator_dict = nn.ModuleDict(
+            {key: EdgeLogitLayer(emb_size, logit_hidden_dim, len(allowable_features[key])) for key in edge_feature_names}
+        )
+
+    def forward(self, batched_node_data, batched_edge_data):
+        batch_size = batched_node_data[node_feature_names[0]].size(0)
+        sequence_len = batched_node_data[node_feature_names[0]].size(1)
+        batched_node_data = {key: batched_node_data[key].transpose(0, 1) for key in node_feature_names}
             
         #
-        out = self.tok_emb(sequences) + self.pos_emb(sequence_len)
+        out = self.pos_emb(sequence_len)
+        for key in node_feature_names:
+            out = out + self.node_emb_dict[key](batched_node_data[key])
+
         out = self.input_dropout(out)
 
         #
-        if self.use_linedistance:
-            arange_tsr = torch.arange(sequence_len)
-            distance_squares = torch.abs(arange_tsr.unsqueeze(0) - arange_tsr.unsqueeze(1))
-            distance_squares = distance_squares.view(1, sequence_len, sequence_len)
-            distance_squares = distance_squares.repeat(batch_size, 1, 1)
-            distance_squares = distance_squares.to(out.device)
-            distance_squares[distance_squares > 199] = 199
+        mask = 0.0
+        for key in edge_feature_names:
+            mask += self.edge_emb_dict[key](batched_edge_data[key])
 
-        #
-        mask = self.distance_embedding_layer(distance_squares).permute(0, 3, 1, 2)
-        mask += self.isopen_embedding_layer(isopen_squares).permute(0, 3, 1, 2)
-        bool_mask = (torch.triu(torch.ones((sequence_len, sequence_len))) == 1).transpose(0, 1)
-        bool_mask = bool_mask.view(1, 1, sequence_len, sequence_len).repeat(batch_size, self.nhead, 1, 1).to(out.device)
-        mask = mask.masked_fill(bool_mask == 0, float("-inf"))
+        mask = mask.permute(0, 3, 1, 2)
         mask = mask.reshape(-1, sequence_len, sequence_len)
-        
+                
         #
-        key_padding_mask = (sequences == self.tokenizer.token_to_id("<pad>")).transpose(0, 1)
+        key_padding_mask = (batched_node_data[node_feature_names[0]] == 0).transpose(0, 1)
 
-        out = self.transformer(out, mask, key_padding_mask)
-        out = out.transpose(0, 1)
-        logits = self.generator(out)
+        out = self.encoder(out, mask, key_padding_mask)
         
-        return logits
+        out = out.transpose(0, 1)
+        out, _, vq_loss = self.vq_layer(out, key_padding_mask)
+        out = out.transpose(0, 1)
+        
+        out = self.decoder(out, None, key_padding_mask)
+        out = out.transpose(0, 1)
+        
+        node_logits = {key: self.node_generator_dict[key](out) for key in node_feature_names}
+        edge_logits = {key: self.edge_generator_dict[key](out) for key in edge_feature_names}
 
-    def decode(self, batch_size, max_len, device):
-        states = [TargetData(["<bos>"]) for _ in range(batch_size)]
-        for _ in range(max_len):
-            #
-            batched_data = TargetData.collate([state.featurize(self.tokenizer) for state in states])
-            batched_data = [tsr.to(device) for tsr in batched_data]
-            
-            ended = batched_data[-1]
-            if ended.all().item():
-                break
-
-            #
-            logits = self(batched_data)[:, -1]
-            distribution = torch.distributions.Categorical(logits=logits)
-            next_ids = distribution.sample()
-            next_ids[ended] = self.tokenizer.token_to_id("<pad>")
-
-            #
-            for next_id, state in zip(next_ids.tolist(), states):
-                next_token = self.tokenizer.id_to_token(next_id)
-                state.update(next_token)
-
-        return states
+        return node_logits, edge_logits, vq_loss
