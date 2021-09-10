@@ -165,7 +165,7 @@ if __name__ == "__main__":
     if hparams.load_checkpoint_path != "":
         model.load_state_dict(torch.load(hparams.load_checkpoint_path)["state_dict"])
 
-    neptune_logger = NeptuneLogger(project="sungsahn0215/molgen", close_after_fit=False)
+    neptune_logger = NeptuneLogger(project="sungsahn0215/molgen")
     neptune_logger.run["params"] = vars(hparams)
     neptune_logger.run["sys/tags"].add(hparams.tag.split("_"))
     checkpoint_callback = ModelCheckpoint(
