@@ -134,7 +134,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
     @staticmethod
     def add_args(parser):
-        parser.add_argument("--dataset_name", type=str, default="zinc")
+        parser.add_argument("--dataset_name", type=str, default="moses")
 
         parser.add_argument("--num_encoder_layers", type=int, default=6)
         parser.add_argument("--num_decoder_layers", type=int, default=6)
