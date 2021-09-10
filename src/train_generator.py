@@ -174,8 +174,7 @@ if __name__ == "__main__":
     hparams = parser.parse_args()
 
     model = BaseGeneratorLightningModule(hparams)
-    if hparams.load_checkpoint_path != "":
-        model.load_from_checkpoint(hparams.load_checkpoint_path)
+    model.load_state_dict(torch.load(hparams.load_checkpoint_path)["state_dict"])
 
     neptune_logger = NeptuneLogger(project="sungsahn0215/molgen", close_after_fit=False)
     neptune_logger.run["params"] = vars(hparams)
@@ -193,7 +192,7 @@ if __name__ == "__main__":
     )
     trainer.fit(model)
 
-    model.load_from_checkpoint(checkpoint_callback.best_model_path)
+    #model.load_from_checkpoint(checkpoint_callback.best_model_path)
     smiles_list = model.sample(hparams.test_num_samples, hparams.max_len, verbose=True)
     smiles_list_path = os.path.join(hparams.checkpoint_dir, "test.txt")
     Path(smiles_list_path).write_text("\n".join(smiles_list))

@@ -127,6 +127,7 @@ class SourceData(object):
                     print(self.tokens, token)
                     assert False
 
+                print(self.tokens, token)
                 return False
                 
         elif tokentype == TokenType.BOND:
@@ -137,6 +138,7 @@ class SourceData(object):
                     print(self.tokens, token)
                     assert False
 
+                print(self.tokens, token)
                 return False
         
         elif tokentype == TokenType.BRANCH_START:
@@ -147,6 +149,7 @@ class SourceData(object):
                     print(self.tokens, token)
                     assert False
 
+                print(self.tokens, token)
                 return False
 
         elif tokentype == TokenType.BRANCH_END:
@@ -155,6 +158,7 @@ class SourceData(object):
                     print(self.tokens, token)
                     assert False
 
+                print(self.tokens, token)
                 return False
         
         elif tokentype == TokenType.RING_NUM:
@@ -166,6 +170,7 @@ class SourceData(object):
                         print(self.tokens, token)
                         assert False
 
+                    print(self.tokens, token)
                     return False
             
             if token in self.open_ring_nums:
@@ -174,6 +179,7 @@ class SourceData(object):
                         print(self.tokens, token)
                         assert False
 
+                    print(self.tokens, token)
                     return False
         
         return True
