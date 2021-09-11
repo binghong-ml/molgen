@@ -122,6 +122,9 @@ def nx_to_tsrs(G):
     #shortestpath_len = torch.LongTensor(nx.algorithms.shortest_paths.dense.floyd_warshall_numpy(G))
     bond_type_tsr = torch.LongTensor(nx.convert_matrix.to_numpy_array(G, weight='bond_type', dtype=np.int))
     bond_dir_tsr = torch.LongTensor(nx.convert_matrix.to_numpy_array(G, weight='bond_dir', dtype=np.int))
+    bond_type_tsr[bond_type_tsr == 0] = allowable_features['bond_type'].index("<nobond>")
+    bond_dir_tsr[bond_dir_tsr == 0] = allowable_features['bond_dir'].index("<nobond>")
+    
     #bond_idx_tsr = torch.LongTensor(nx.convert_matrix.to_numpy_array(G, weight='bond_idx', dtype=np.int))
     edge_tsrs = {
         #'adj': adj_tsr,
