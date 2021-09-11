@@ -8,8 +8,8 @@ import networkx as nx
 import torch
 
 from rdkit import Chem
-from rdkit import rdBase
-rdBase.DisableLog('rdApp.error')
+#from rdkit import rdBase
+#rdBase.DisableLog('rdApp.error')
 
 NODE_FEATURE_NAMES = ['atomic_num', 'chiral_tag', 'formal_charge', 'num_explicit_Hs']
 NODE_TARGET_NAMES = ['atomic_num', 'chiral_tag', 'formal_charge', 'num_explicit_Hs']
@@ -148,6 +148,7 @@ def tsrs_to_nx(node_tsrs, edge_tsrs):
     for key in edge_tsrs:
         edge_tsrs[key] = edge_tsrs[key][mask][:, mask]
 
+    
     adj = (edge_tsrs['bond_type'] != ALLOWABLE_FEATURES['bond_type'].index("<nobond>"))
     G = nx.from_numpy_array(adj.numpy())
     for node in G.nodes():

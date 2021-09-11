@@ -218,4 +218,13 @@ class VariationalAutoEncoder(nn.Module):
         node_preds = {key: torch.argmax(node_logits[key], dim=-1) for key in node_logits}
         edge_preds = {key: torch.argmax(edge_logits[key], dim=-1) for key in edge_logits}
 
+        for key in node_preds:
+            for idx in range(num_samples):
+                node_preds[key][idx][num_nodes_list[idx]:] = 0
+        
+        for key in edge_preds:
+            for idx in range(num_samples):
+                edge_preds[key][idx][num_nodes_list[idx]:] = 0
+                edge_preds[key][idx][:, num_nodes_list[idx]:] = 0
+        
         return node_preds, edge_preds
