@@ -55,7 +55,6 @@ class BaseTranslatorLightningModule(pl.LightningModule):
             self.train_dataset,
             batch_size=self.hparams.batch_size,
             shuffle=True,
-            collate_fn=self.collate,
             num_workers=self.hparams.num_workers,
         )
 
@@ -64,7 +63,6 @@ class BaseTranslatorLightningModule(pl.LightningModule):
             self.val_dataset,
             batch_size=self.hparams.batch_size,
             shuffle=False,
-            collate_fn=self.collate,
             num_workers=self.hparams.num_workers,
         )
 
@@ -100,7 +98,6 @@ class BaseTranslatorLightningModule(pl.LightningModule):
         return loss
         
     def validation_step(self, batched_data, batch_idx):
-        
         loss, statistics = self.shared_step(batched_data, batch_idx)
         for key, val in statistics.items():
             self.log(f"validation/{key}", val, on_step=False, on_epoch=True, logger=True)

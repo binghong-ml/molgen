@@ -75,6 +75,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
         # decoding
         batched_node_data, batched_edge_data = batched_data
+        
         node_logits, edge_logits, vq_loss = self.model(batched_node_data, batched_edge_data)
             
         statistics[f"loss/vq"] = vq_loss
@@ -143,7 +144,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--dim_feedforward", type=int, default=2048)
         parser.add_argument("--dropout", type=float, default=0.1)
         parser.add_argument("--logit_hidden_dim", type=int, default=256)
-        parser.add_argument("--vq_vocab_size", type=int, default=8192)
+        parser.add_argument("--vq_vocab_size", type=int, default=32)
 
         parser.add_argument("--lr", type=float, default=1e-6)
         parser.add_argument("--batch_size", type=int, default=256)

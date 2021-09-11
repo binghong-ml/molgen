@@ -18,7 +18,7 @@ def pad_squares(squares, pad_id):
     max_dim = max([square.size(0) for square in squares])
     batched_squares = torch.full((len(squares), max_dim, max_dim), pad_id, dtype=torch.long)
     for idx, square in enumerate(squares):
-        batched_squares[idx, : square.size(0), : square.size(1)] = square
+        batched_squares[idx, : square.size(0), : square.size(1)] = square  + 1
 
     return batched_squares
 

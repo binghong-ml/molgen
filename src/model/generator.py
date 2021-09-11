@@ -79,7 +79,7 @@ class BaseGenerator(nn.Module):
             {key: TokenEmbedding(len(allowable_features[key]), emb_size) for key in node_feature_names}
             )
         self.edge_emb_dict = nn.ModuleDict(
-            {key: TokenEmbedding(len(allowable_features[key]), nhead) for key in edge_feature_names}
+            {key: TokenEmbedding(len(allowable_features[key]) + 1, nhead) for key in edge_feature_names}
             )
 
         #
@@ -103,7 +103,7 @@ class BaseGenerator(nn.Module):
             {key: nn.Linear(emb_size, len(allowable_features[key])) for key in node_feature_names}
         )
         self.edge_generator_dict = nn.ModuleDict(
-            {key: EdgeLogitLayer(emb_size, logit_hidden_dim, len(allowable_features[key])) for key in edge_feature_names}
+            {key: EdgeLogitLayer(emb_size, logit_hidden_dim, len(allowable_features[key]) + 1) for key in edge_feature_names}
         )
 
     def forward(self, batched_node_data, batched_edge_data):
@@ -142,3 +142,49 @@ class BaseGenerator(nn.Module):
         edge_logits = {key: self.edge_generator_dict[key](out) for key in edge_feature_names}
 
         return node_logits, edge_logits, vq_loss
+
+    def encode(self, batched_node_data, batched_edge_data):
+        batch_size = batched_node_data[node_feature_names[0]].size(0)
+        sequence_len = batched_node_data[node_feature_names[0]].size(1)
+        batched_node_data = {key: batched_node_data[key].transpose(0, 1) for key in node_feature_names}
+            
+        #
+        out = self.pos_emb(sequence_len)
+        for key in node_feature_names:
+            out = out + self.node_emb_dict[key](batched_node_data[key])
+
+        out = self.input_dropout(out)
+
+        #
+        mask = 0.0
+        for key in edge_feature_names:
+            mask += self.edge_emb_dict[key](batched_edge_data[key])
+
+        mask = mask.permute(0, 3, 1, 2)
+        mask = mask.reshape(-1, sequence_len, sequence_len)
+                
+        #
+        key_padding_mask = (batched_node_data[node_feature_names[0]] == 0).transpose(0, 1)
+
+        out = self.encoder(out, mask, key_padding_mask)
+        
+        out = out.transpose(0, 1)
+        out, out_ind, _ = self.vq_layer(out, key_padding_mask)
+        
+        return out_ind, key_padding_mask
+        
+    def decode(self, ind, key_padding_mask):
+        out = self.vq_layer.compute_embedding(ind)
+        out = out.transpose(0, 1)
+
+        out = self.decoder(out, None, key_padding_mask)
+        out = out.transpose(0, 1)
+        
+        node_logits = {key: self.node_generator_dict[key](out) for key in node_feature_names}
+        edge_logits = {key: self.edge_generator_dict[key](out) for key in edge_feature_names}
+
+        node_ids = {key: torch.argmax(node_logits[key], dim=-1) for key in node_feature_names}
+        edge_ids = {key: torch.argmax(edge_logits[key], dim=-1) for key in edge_feature_names}
+
+        return node_ids, edge_ids
+        

@@ -52,13 +52,12 @@ def mol_to_nx(mol):
             num_explicit_Hs=allowable_features['num_explicit_Hs'].index(atom.GetNumExplicitHs())
             )
     
-    for bond_idx, bond in enumerate(mol.GetBonds()):
+    for bond in mol.GetBonds():
         G.add_edge(
             bond.GetBeginAtomIdx(),
             bond.GetEndAtomIdx(),
-            bond_type=allowable_features['bond_type'].index(bond.GetBondType()), # add 1 to differentiate with non-bonds
+            bond_type=allowable_features['bond_type'].index(bond.GetBondType()),
             bond_dir=allowable_features['bond_dir'].index(bond.GetBondDir()),
-            bond_idx=bond_idx + 1
             )
     
     return G
@@ -84,8 +83,7 @@ def nx_to_mol(G):
     bond_types = nx.get_edge_attributes(G, 'bond_type')
     bond_dirs = nx.get_edge_attributes(G, 'bond_dir')
     
-    bond_idxs = nx.get_edge_attributes(G, 'bond_idx')
-    for edge in sorted(G.edges(), key=lambda edge: bond_idxs[edge]):
+    for edge in G.edges():
         first, second = edge
         ifirst = node_to_idx[first]
         isecond = node_to_idx[second]
@@ -122,13 +120,13 @@ def nx_to_tsrs(G):
     shortestpath_len = torch.LongTensor(nx.algorithms.shortest_paths.dense.floyd_warshall_numpy(G))
     bond_type_tsr = torch.LongTensor(nx.convert_matrix.to_numpy_array(G, weight='bond_type', dtype=np.int))
     bond_dir_tsr = torch.LongTensor(nx.convert_matrix.to_numpy_array(G, weight='bond_dir', dtype=np.int))
-    bond_idx_tsr = torch.LongTensor(nx.convert_matrix.to_numpy_array(G, weight='bond_idx', dtype=np.int))
+    #bond_idx_tsr = torch.LongTensor(nx.convert_matrix.to_numpy_array(G, weight='bond_idx', dtype=np.int))
     edge_tsrs = {
         'adj': adj_tsr,
         'shortestpath_len': shortestpath_len,
         'bond_type': bond_type_tsr, 
         'bond_dir': bond_dir_tsr,
-        'bond_idx': bond_idx_tsr,
+        #'bond_idx': bond_idx_tsr,
         }
     
     return node_tsrs, edge_tsrs
@@ -163,5 +161,9 @@ def smiles_to_tsrs(smiles):
 def tsrs_to_smiles(node_tsrs, edge_tsrs):
     G = tsrs_to_nx(node_tsrs, edge_tsrs)
     mol = nx_to_mol(G)
-    smiles = Chem.MolToSmiles(mol)
-    return smiles
+    try:
+        smiles = Chem.MolToSmiles(mol)
+        return smiles
+    except:
+        return None
+        
