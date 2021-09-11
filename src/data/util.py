@@ -43,6 +43,7 @@ ALLOWABLE_FEATURES = {
         Chem.rdchem.BondDir.ENDUPRIGHT,
         Chem.rdchem.BondDir.ENDDOWNRIGHT,
         ],
+    'shortest_path': ['<pad>', '<nobond>'] + list(range(150))
 }
 
 def mol_to_nx(mol):
@@ -120,8 +121,8 @@ def nx_to_tsrs(G):
         'num_explicit_Hs': num_explicit_Hss_tsr
         }
 
-    adj_np = nx.convert_matrix.to_numpy_array(G, dtype=np.int)
-    adj_tsr = torch.LongTensor(adj_np)
+    #adj_np = nx.convert_matrix.to_numpy_array(G, dtype=np.int)
+    #adj_tsr = torch.LongTensor(adj_np)
     shortestpath_len = torch.LongTensor(nx.algorithms.shortest_paths.dense.floyd_warshall_numpy(G))
     bond_type_tsr = torch.LongTensor(nx.convert_matrix.to_numpy_array(G, weight='bond_type', dtype=np.int))
     bond_dir_tsr = torch.LongTensor(nx.convert_matrix.to_numpy_array(G, weight='bond_dir', dtype=np.int))
@@ -131,9 +132,9 @@ def nx_to_tsrs(G):
     #bond_idx_tsr = torch.LongTensor(nx.convert_matrix.to_numpy_array(G, weight='bond_idx', dtype=np.int))
     edge_tsrs = {
         #'adj': adj_tsr,
-        'shortestpath': shortestpath_len,
         'bond_type': bond_type_tsr, 
         'bond_dir': bond_dir_tsr,
+        'shortest_path': shortestpath_len,
         #'bond_idx': bond_idx_tsr,
         }
     
