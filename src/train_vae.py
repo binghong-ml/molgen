@@ -40,7 +40,7 @@ class VariationalAutoEncoderLightningModule(pl.LightningModule):
         self.val_dataset.smiles_list = self.val_dataset.smiles_list
 
 
-        self.train_smiles_set = set(self.train_dataset.smiles_list[:100000])
+        self.train_smiles_set = set(self.train_dataset.smiles_list[:500000])
         get_num_nodes = lambda smiles: len(Chem.MolFromSmiles(smiles).GetAtoms())
         self.num_nodes_list = Parallel(n_jobs=hparams.num_workers)(
             delayed(get_num_nodes)(smiles) for smiles in self.train_smiles_set
@@ -116,6 +116,8 @@ class VariationalAutoEncoderLightningModule(pl.LightningModule):
 
         smiles_list = [smiles for smiles in smiles_list if smiles is not None]
         statistics["sample/valid"] = float(len(smiles_list)) / self.hparams.num_samples
+        for smiles in smiles_list:
+            self.logger.experiment["smiles"].log(f"{self.current_epoch}, {smiles}")
         
         unique_smiles_set = set(smiles_list)
         statistics["sample/unique"] = float(len(unique_smiles_set)) / self.hparams.num_samples
@@ -161,7 +163,7 @@ class VariationalAutoEncoderLightningModule(pl.LightningModule):
         parser.add_argument("--emb_size", type=int, default=1024)
         parser.add_argument("--nhead", type=int, default=8)
         parser.add_argument("--dim_feedforward", type=int, default=2048)
-        parser.add_argument("--logit_hidden_dim", type=int, default=1024)
+        parser.add_argument("--logit_hidden_dim", type=int, default=256)
         parser.add_argument("--code_dim", type=int, default=64)
         parser.add_argument("--reg_coef", type=float, default=1e-1)
         

@@ -220,11 +220,11 @@ class VariationalAutoEncoder(nn.Module):
 
         for key in node_preds:
             for idx in range(num_samples):
-                node_preds[key][idx][num_nodes_list[idx]:] = 0
+                node_preds[key][idx][num_nodes_list[idx]:] = ALLOWABLE_FEATURES[key].index('<pad>')
         
         for key in edge_preds:
             for idx in range(num_samples):
-                edge_preds[key][idx][num_nodes_list[idx]:] = 0
-                edge_preds[key][idx][:, num_nodes_list[idx]:] = 0
+                edge_preds[key][idx][num_nodes_list[idx]:] = ALLOWABLE_FEATURES[key].index('<pad>')
+                edge_preds[key][idx][:, num_nodes_list[idx]:] = ALLOWABLE_FEATURES[key].index('<pad>')
         
         return node_preds, edge_preds
