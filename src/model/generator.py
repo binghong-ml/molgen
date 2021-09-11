@@ -79,7 +79,7 @@ class BaseGenerator(nn.Module):
             {key: TokenEmbedding(len(allowable_features[key]), emb_size) for key in node_feature_names}
             )
         self.edge_emb_dict = nn.ModuleDict(
-            {key: TokenEmbedding(len(allowable_features[key]) + 1, nhead) for key in edge_feature_names}
+            {key: TokenEmbedding(len(allowable_features[key]), nhead) for key in edge_feature_names}
             )
 
         #
@@ -103,7 +103,7 @@ class BaseGenerator(nn.Module):
             {key: nn.Linear(emb_size, len(allowable_features[key])) for key in node_feature_names}
         )
         self.edge_generator_dict = nn.ModuleDict(
-            {key: EdgeLogitLayer(emb_size, logit_hidden_dim, len(allowable_features[key]) + 1) for key in edge_feature_names}
+            {key: EdgeLogitLayer(emb_size, logit_hidden_dim, len(allowable_features[key])) for key in edge_feature_names}
         )
 
     def forward(self, batched_node_data, batched_edge_data):
