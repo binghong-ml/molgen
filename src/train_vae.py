@@ -156,7 +156,7 @@ class VariationalAutoEncoderLightningModule(pl.LightningModule):
         parser.add_argument("--dim_feedforward", type=int, default=2048)
         parser.add_argument("--dropout", type=float, default=0.1)
         parser.add_argument("--logit_hidden_dim", type=int, default=256)
-        parser.add_argument("--code_dim", type=int, default=256)
+        parser.add_argument("--code_dim", type=int, default=64)
         parser.add_argument("--reg_coef", type=float, default=1e-1)
         
         parser.add_argument("--lr", type=float, default=1e-5)
@@ -171,7 +171,7 @@ class VariationalAutoEncoderLightningModule(pl.LightningModule):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    BaseGeneratorLightningModule.add_args(parser)
+    VariationalAutoEncoderLightningModule.add_args(parser)
     parser.add_argument("--max_epochs", type=int, default=100)
     parser.add_argument("--gradient_clip_val", type=float, default=0.5)
     parser.add_argument("--checkpoint_dir", type=str, default="../resource/checkpoint/default")
@@ -179,7 +179,7 @@ if __name__ == "__main__":
     parser.add_argument("--tag", type=str, default="default")
     hparams = parser.parse_args()
 
-    model = BaseGeneratorLightningModule(hparams)
+    model = VariationalAutoEncoderLightningModule(hparams)
     if hparams.load_checkpoint_path != "":
         model.load_state_dict(torch.load(hparams.load_checkpoint_path)["state_dict"])
 
