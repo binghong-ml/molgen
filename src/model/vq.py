@@ -47,7 +47,17 @@ class VectorQuantization(nn.Module):
             embed_normalized = self.embed_avg / cluster_size.unsqueeze(0)
             self.embed.data.copy_(embed_normalized)
 
-        return quantize, embed_ind.view(*input.shape[:-1]), loss
+        return quantize, loss
     
+    def compute_embedding_index(self):
+        flatten = input.reshape(-1, self.dim)
+        dist = (
+            flatten.pow(2).sum(1, keepdim=True)
+            - 2 * flatten @ self.embed
+            + self.embed.pow(2).sum(0, keepdim=True)
+        )
+        embed_ind = dist.argmin(dim=1).view(*input.shape[:-1])
+        return embed_ind        
+
     def compute_embedding(self, embed_ind):
         return F.embedding(embed_ind, self.embed.transpose(0, 1))

@@ -5,7 +5,7 @@ import math
 
 from tqdm import tqdm
 
-from model.vectorquantization import VectorQuantization
+from model.vq import VectorQuantization
 from data.util import allowable_features, node_feature_names, edge_feature_names
 
 # helper Module that adds positional encoding to the token embedding to introduce a notion of word order.
@@ -57,7 +57,7 @@ class EdgeLogitLayer(nn.Module):
 
         return logits
 
-class BaseGenerator(nn.Module):
+class VectorQuantizedVariationalAutoEncoder(nn.Module):
     def __init__(
         self,
         num_encoder_layers,
@@ -69,7 +69,7 @@ class BaseGenerator(nn.Module):
         logit_hidden_dim,
         vq_vocab_size,
     ):
-        super(BaseGenerator, self).__init__()
+        super(VectorQuantizedVariationalAutoEncoder, self).__init__()
         self.nhead = nhead
 
         #

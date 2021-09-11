@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch.distributions import Normal
 import math
 import random
+
 # helper Module to convert tensor of input indices into corresponding tensor of token embeddings
 class TokenEmbedding(nn.Module):
     def __init__(self, vocab_size, emb_size):

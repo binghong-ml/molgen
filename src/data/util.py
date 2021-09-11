@@ -8,11 +8,14 @@ import networkx as nx
 import torch
 
 from rdkit import Chem
+from rdkit import rdBase
+rdBase.DisableLog('rdApp.error')
 
-node_feature_names = ['atomic_num', 'chiral_tag', 'formal_charge', 'num_explicit_Hs']
-edge_feature_names = ['bond_type', 'bond_dir']
-
-allowable_features = {
+NODE_FEATURE_NAMES = ['atomic_num', 'chiral_tag', 'formal_charge', 'num_explicit_Hs']
+NODE_TARGET_NAMES = ['atomic_num', 'chiral_tag', 'formal_charge', 'num_explicit_Hs']
+EDGE_FEATURE_NAMES = ['bond_type', 'bond_dir', 'shortest_path']
+EDGE_TARGET_NAMES = ['bond_type', 'bond_dir']
+ALLOWABLE_FEATURES = {
     # Minimal atom features
     'atomic_num' : ['<pad>'] + list(range(1, 119)),
     'chiral_tag' : [
@@ -48,18 +51,18 @@ def mol_to_nx(mol):
     for atom in mol.GetAtoms():
         G.add_node(
             atom.GetIdx(),       
-            atomic_num=allowable_features['atomic_num'].index(atom.GetAtomicNum()),
-            chiral_tag=allowable_features['chiral_tag'].index(atom.GetChiralTag()),
-            formal_charge=allowable_features['formal_charge'].index(atom.GetFormalCharge()),
-            num_explicit_Hs=allowable_features['num_explicit_Hs'].index(atom.GetNumExplicitHs())
+            atomic_num=ALLOWABLE_FEATURES['atomic_num'].index(atom.GetAtomicNum()),
+            chiral_tag=ALLOWABLE_FEATURES['chiral_tag'].index(atom.GetChiralTag()),
+            formal_charge=ALLOWABLE_FEATURES['formal_charge'].index(atom.GetFormalCharge()),
+            num_explicit_Hs=ALLOWABLE_FEATURES['num_explicit_Hs'].index(atom.GetNumExplicitHs())
             )
     
     for bond in mol.GetBonds():
         G.add_edge(
             bond.GetBeginAtomIdx(),
             bond.GetEndAtomIdx(),
-            bond_type=allowable_features['bond_type'].index(bond.GetBondType()),
-            bond_dir=allowable_features['bond_dir'].index(bond.GetBondDir()),
+            bond_type=ALLOWABLE_FEATURES['bond_type'].index(bond.GetBondType()),
+            bond_dir=ALLOWABLE_FEATURES['bond_dir'].index(bond.GetBondDir()),
             )
     
     return G
@@ -74,10 +77,10 @@ def nx_to_mol(G):
     
     node_to_idx = {}
     for node in G.nodes():
-        a=Chem.Atom(allowable_features['atomic_num'][atomic_nums[node]])
-        a.SetChiralTag(allowable_features['chiral_tag'][chiral_tags[node]])
-        a.SetFormalCharge(allowable_features['formal_charge'][formal_charges[node]])
-        a.SetNumExplicitHs(allowable_features['num_explicit_Hs'][num_explicit_Hss[node]])
+        a=Chem.Atom(ALLOWABLE_FEATURES['atomic_num'][atomic_nums[node]])
+        a.SetChiralTag(ALLOWABLE_FEATURES['chiral_tag'][chiral_tags[node]])
+        a.SetFormalCharge(ALLOWABLE_FEATURES['formal_charge'][formal_charges[node]])
+        a.SetNumExplicitHs(ALLOWABLE_FEATURES['num_explicit_Hs'][num_explicit_Hss[node]])
         
         idx = mol.AddAtom(a)
         node_to_idx[node] = idx
@@ -90,11 +93,11 @@ def nx_to_mol(G):
         ifirst = node_to_idx[first]
         isecond = node_to_idx[second]
         bond_type = bond_types[first, second]
-        mol.AddBond(ifirst, isecond, allowable_features['bond_type'][bond_type])
+        mol.AddBond(ifirst, isecond, ALLOWABLE_FEATURES['bond_type'][bond_type])
 
         bond_dir = bond_dirs[first, second]
         new_bond = mol.GetBondBetweenAtoms(ifirst, isecond)
-        new_bond.SetBondDir(allowable_features['bond_dir'][bond_dir])
+        new_bond.SetBondDir(ALLOWABLE_FEATURES['bond_dir'][bond_dir])
 
     return mol
 
@@ -117,18 +120,18 @@ def nx_to_tsrs(G):
         'num_explicit_Hs': num_explicit_Hss_tsr
         }
 
-    #adj_np = nx.convert_matrix.to_numpy_array(G, dtype=np.int)
-    #adj_tsr = torch.LongTensor(adj_np)
-    #shortestpath_len = torch.LongTensor(nx.algorithms.shortest_paths.dense.floyd_warshall_numpy(G))
+    adj_np = nx.convert_matrix.to_numpy_array(G, dtype=np.int)
+    adj_tsr = torch.LongTensor(adj_np)
+    shortestpath_len = torch.LongTensor(nx.algorithms.shortest_paths.dense.floyd_warshall_numpy(G))
     bond_type_tsr = torch.LongTensor(nx.convert_matrix.to_numpy_array(G, weight='bond_type', dtype=np.int))
     bond_dir_tsr = torch.LongTensor(nx.convert_matrix.to_numpy_array(G, weight='bond_dir', dtype=np.int))
-    bond_type_tsr[bond_type_tsr == 0] = allowable_features['bond_type'].index("<nobond>")
-    bond_dir_tsr[bond_dir_tsr == 0] = allowable_features['bond_dir'].index("<nobond>")
+    bond_type_tsr[bond_type_tsr == 0] = ALLOWABLE_FEATURES['bond_type'].index("<nobond>")
+    bond_dir_tsr[bond_dir_tsr == 0] = ALLOWABLE_FEATURES['bond_dir'].index("<nobond>")
     
     #bond_idx_tsr = torch.LongTensor(nx.convert_matrix.to_numpy_array(G, weight='bond_idx', dtype=np.int))
     edge_tsrs = {
         #'adj': adj_tsr,
-        #'shortestpath_len': shortestpath_len,
+        'shortestpath': shortestpath_len,
         'bond_type': bond_type_tsr, 
         'bond_dir': bond_dir_tsr,
         #'bond_idx': bond_idx_tsr,
@@ -137,7 +140,15 @@ def nx_to_tsrs(G):
     return node_tsrs, edge_tsrs
 
 def tsrs_to_nx(node_tsrs, edge_tsrs):
-    G = nx.from_numpy_array(edge_tsrs['adj'].numpy())
+    mask = node_tsrs['atomic_num'] != ALLOWABLE_FEATURES['atomic_num'].index('<pad>')
+    for key in node_tsrs:
+        node_tsrs[key] = node_tsrs[key][mask]
+    
+    for key in edge_tsrs:
+        edge_tsrs[key] = edge_tsrs[key][mask][:, mask]
+
+    adj = (edge_tsrs['bond_type'] != ALLOWABLE_FEATURES['bond_type'].index("<nobond>"))
+    G = nx.from_numpy_array(adj.numpy())
     for node in G.nodes():
         for key, val in node_tsrs.items():
             G.nodes[node][key] = val[node]
@@ -165,8 +176,8 @@ def smiles_to_tsrs(smiles):
 
 def tsrs_to_smiles(node_tsrs, edge_tsrs):
     G = tsrs_to_nx(node_tsrs, edge_tsrs)
-    mol = nx_to_mol(G)
     try:
+        mol = nx_to_mol(G)
         smiles = Chem.MolToSmiles(mol)
         return smiles
     except:

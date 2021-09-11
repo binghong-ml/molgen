@@ -5,7 +5,7 @@ import torch
 from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
 
-from data.util import smiles_to_tsrs, node_feature_names, edge_feature_names
+from data.util import smiles_to_tsrs, NODE_FEATURE_NAMES, EDGE_FEATURE_NAMES
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -26,9 +26,9 @@ def collate(data_list):
     node_data_list, edge_data_list = zip(*data_list)
     batched_node_data = {
         key: pad_sequence([d[key] for d in node_data_list], batch_first=True, padding_value=0) 
-        for key in node_feature_names
+        for key in NODE_FEATURE_NAMES
         }
-    batched_edge_data = {key: pad_squares([d[key] for d in edge_data_list], 0) for key in edge_feature_names}
+    batched_edge_data = {key: pad_squares([d[key] for d in edge_data_list], 0) for key in EDGE_FEATURE_NAMES}
     return batched_node_data, batched_edge_data 
 
 class ZincDataset(Dataset):

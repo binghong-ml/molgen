@@ -1,6 +1,7 @@
 import os
 import argparse
 from pathlib import Path
+from joblib.parallel import delayed
 
 import torch
 import torch.nn.functional as F
@@ -10,15 +11,18 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
 from neptune.new.integrations.pytorch_lightning import NeptuneLogger
 
-import moses
-
-from model.generator import BaseGenerator
+from model.vae import VariationalAutoEncoder
 from data.dataset import ZincDataset, MosesDataset, PolymerDataset, collate
-from data.util import node_feature_names, edge_feature_names
+from data.util import EDGE_TARGET_NAMES, NODE_TARGET_NAMES, tsrs_to_smiles
 
-class BaseGeneratorLightningModule(pl.LightningModule):
+from rdkit import Chem
+import moses
+from joblib import Parallel, delayed
+
+
+class VariationalAutoEncoderLightningModule(pl.LightningModule):
     def __init__(self, hparams):
-        super(BaseGeneratorLightningModule, self).__init__()
+        super(VariationalAutoEncoderLightningModule, self).__init__()
         hparams = argparse.Namespace(**hparams) if isinstance(hparams, dict) else hparams
         self.save_hyperparameters(hparams)
         self.setup_datasets(hparams)
@@ -30,20 +34,24 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         self.train_dataset = dataset_cls("train")
         self.val_dataset = dataset_cls("valid")
         self.test_dataset = dataset_cls("test")
-        self.train_smiles_set = set(self.train_dataset.smiles_list)
-        
         self.collate = collate
 
+        self.train_smiles_set = set(self.train_dataset.smiles_list[:100000])
+        get_num_nodes = lambda smiles: len(Chem.MolFromSmiles(smiles).GetAtoms())
+        self.num_nodes_list = Parallel(n_jobs=hparams.num_workers)(
+            delayed(get_num_nodes)(smiles) for smiles in self.train_smiles_set
+            )
+
     def setup_model(self, hparams):
-        self.model = BaseGenerator(
-            hparams.num_encoder_layers,
-            hparams.num_decoder_layers,
-            hparams.emb_size,
-            hparams.nhead,
-            hparams.dim_feedforward,
-            hparams.dropout,
-            hparams.logit_hidden_dim,
-            hparams.vq_vocab_size,
+        self.model = VariationalAutoEncoder(
+            num_encoder_layers= hparams.num_encoder_layers,
+            num_decoder_layers= hparams.num_decoder_layers,
+            emb_size= hparams.emb_size,
+            nhead= hparams.nhead,
+            dim_feedforward= hparams.dim_feedforward,
+            logit_hidden_dim= hparams.logit_hidden_dim,
+            code_dim= hparams.code_dim,
+            num_nodes_list= self.num_nodes_list,
         )
 
     ### Dataloaders and optimizers
@@ -71,52 +79,17 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
     ### Main steps
     def shared_step(self, batched_data):
-        loss, statistics = 0.0, dict()
-
-        # decoding
         batched_node_data, batched_edge_data = batched_data
+        statistics = self.model.step(batched_node_data, batched_edge_data)
         
-        node_logits, edge_logits, vq_loss = self.model(batched_node_data, batched_edge_data)
-            
-        statistics[f"loss/vq"] = vq_loss
+        loss = 0.0
+        for key in NODE_TARGET_NAMES + EDGE_TARGET_NAMES:
+            loss += statistics[f"loss/{key}"]
 
-        correct_total = 1.0
-        loss_total = 0.0
-        loss_total += 0.01 * vq_loss
-        for key in node_feature_names + edge_feature_names:
-            if key in node_feature_names:
-                batch_size = node_logits[key].size(0)
-                logits = node_logits[key].reshape(-1, node_logits[key].size(-1))
-                targets = batched_node_data[key].reshape(-1)
-            else:
-                batch_size = edge_logits[key].size(0)
-                logits = edge_logits[key].reshape(-1, edge_logits[key].size(-1))
-                targets = batched_edge_data[key].reshape(-1)
+        loss += self.hparams.reg_coef * statistics[f"loss/reg"]
+        statistics["loss/total"] = loss
 
-            loss = F.cross_entropy(logits, targets, ignore_index=0) 
-            
-            preds = torch.argmax(logits, -1)
-            correct = preds == targets
-            correct[targets == 0] = True
-            elem_acc = correct[targets != 0].float().mean()
-            sequence_acc = correct.view(batch_size, -1).all(dim=1).float().mean()
-            
-            correct_total = correct_total * correct.view(batch_size, -1).all(dim=1).float()
-            if key in node_feature_names:
-                statistics[f"loss/node_{key}"] = loss
-                statistics[f"elem_acc/node_{key}"] = elem_acc 
-                statistics[f"seq_acc/node_{key}"] = sequence_acc
-            else:
-                statistics[f"loss/edge_{key}"] = loss
-                statistics[f"elem_acc/edge_{key}"] = elem_acc 
-                statistics[f"seq_acc/edge_{key}"] = sequence_acc
-
-            loss_total += loss
-
-        statistics["loss/total"] = loss_total
-        statistics["acc/total"] = correct_total.mean()
-
-        return loss_total, statistics
+        return loss, statistics
 
     def training_step(self, batched_data, batch_idx):
         self.sanity_checked = True
@@ -133,9 +106,48 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
         return loss
 
+    def validation_epoch_end(self, outputs):
+        statistics = dict()
+        smiles_list = self.sample(self.hparams.num_samples)
+
+        smiles_list = [smiles for smiles in smiles_list if smiles is not None]
+        statistics["sample/valid"] = float(len(smiles_list)) / self.hparams.num_samples
+        
+        unique_smiles_set = set(smiles_list)
+        statistics["sample/unique"] = float(len(unique_smiles_set)) / self.hparams.num_samples
+        
+        novel_smiles_set = unique_smiles_set - self.train_smiles_set
+        statistics["sample/novel"] = float(len(novel_smiles_set)) / self.hparams.num_samples
+
+        for key, val in statistics.items():
+            self.log(key, val, on_step=False, on_epoch=True, logger=True)
+
+    def sample(self, num_samples):
+        smiles_list = []
+        while len(smiles_list) < num_samples: 
+            cur_num_samples = min(num_samples-len(smiles_list), self.hparams.sample_batch_size)
+            cur_smiles_list = self._sample(cur_num_samples)
+            smiles_list = smiles_list + cur_smiles_list
+
+        return smiles_list
+
+    def _sample(self, num_samples):
+        node_ids, edge_ids = self.model.sample(num_samples, self.device)
+        node_ids = {key: node_ids[key].cpu() for key in node_ids}
+        edge_ids = {key: edge_ids[key].cpu() for key in edge_ids}
+
+        smiles_list = []
+        for idx in range(num_samples):
+            node_tsrs = {key: node_ids[key][idx] for key in NODE_TARGET_NAMES}
+            edge_tsrs = {key: edge_ids[key][idx] for key in EDGE_TARGET_NAMES}
+            smiles = tsrs_to_smiles(node_tsrs, edge_tsrs)
+            smiles_list.append(smiles)
+
+        return smiles_list
+
     @staticmethod
     def add_args(parser):
-        parser.add_argument("--dataset_name", type=str, default="moses")
+        parser.add_argument("--dataset_name", type=str, default="zinc")
 
         parser.add_argument("--num_encoder_layers", type=int, default=6)
         parser.add_argument("--num_decoder_layers", type=int, default=6)
@@ -144,11 +156,16 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--dim_feedforward", type=int, default=2048)
         parser.add_argument("--dropout", type=float, default=0.1)
         parser.add_argument("--logit_hidden_dim", type=int, default=256)
-        parser.add_argument("--vq_vocab_size", type=int, default=32)
-
-        parser.add_argument("--lr", type=float, default=1e-6)
+        parser.add_argument("--code_dim", type=int, default=256)
+        parser.add_argument("--reg_coef", type=float, default=1e-1)
+        
+        parser.add_argument("--lr", type=float, default=1e-5)
         parser.add_argument("--batch_size", type=int, default=256)
         parser.add_argument("--num_workers", type=int, default=8)
+
+        parser.add_argument("--num_samples", type=int, default=256)
+        parser.add_argument("--sample_batch_size", type=int, default=256)
+        
 
         return parser
 
