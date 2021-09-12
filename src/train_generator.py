@@ -28,7 +28,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
     def setup_datasets(self, hparams):
         dataset_cls = {"zinc": ZincDataset, "moses": MosesDataset, "polymer": PolymerDataset}.get(hparams.dataset_name)
-        self.train_dataset = dataset_cls("valid")
+        self.train_dataset = dataset_cls("train")
         self.val_dataset = dataset_cls("valid")
         self.test_dataset = dataset_cls("test")
         self.train_smiles_set = set(self.train_dataset.smiles_list)
@@ -185,13 +185,11 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             if verbose:
                 print(f"{len(maybe_smiles_list)} / {num_samples}")
 
-        print(errors)
-
         return maybe_smiles_list, errors
 
     @staticmethod
     def add_args(parser):
-        parser.add_argument("--dataset_name", type=str, default="zinc")
+        parser.add_argument("--dataset_name", type=str, default="moses")
 
         parser.add_argument("--num_layers", type=int, default=6)
         parser.add_argument("--emb_size", type=int, default=1024)
@@ -205,7 +203,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--num_workers", type=int, default=8)
 
         parser.add_argument("--max_len", type=int, default=250)
-        parser.add_argument("--num_samples", type=int, default=256)
+        parser.add_argument("--num_samples", type=int, default=1024)
         parser.add_argument("--sample_batch_size", type=int, default=256)
         parser.add_argument("--test_num_samples", type=int, default=30000)
         
@@ -216,7 +214,6 @@ if __name__ == "__main__":
     BaseGeneratorLightningModule.add_args(parser)
     parser.add_argument("--max_epochs", type=int, default=100)
     parser.add_argument("--gradient_clip_val", type=float, default=0.5)
-    parser.add_argument("--checkpoint_dir", type=str, default="../resource/checkpoint/default")
     parser.add_argument("--load_checkpoint_path", type=str, default="")
     parser.add_argument("--tag", type=str, default="default")
     hparams = parser.parse_args()
@@ -227,25 +224,27 @@ if __name__ == "__main__":
     neptune_logger = NeptuneLogger(project="sungsahn0215/molgen", close_after_fit=False)
     neptune_logger.run["params"] = vars(hparams)
     neptune_logger.run["sys/tags"].add(hparams.tag.split("_"))
-    #checkpoint_callback = ModelCheckpoint(
-    #    dirpath=os.path.join("../resource/checkpoint/", hparams.tag), monitor="validation/loss/total", mode="min",
-    #)
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=os.path.join("../resource/checkpoint/", hparams.tag), monitor="validation/loss/total", mode="min",
+    )
     trainer = pl.Trainer(
         gpus=1,
         logger=neptune_logger,
         default_root_dir="../resource/log/",
         max_epochs=hparams.max_epochs,
-        #callbacks=[checkpoint_callback],
+        callbacks=[checkpoint_callback],
         gradient_clip_val=hparams.gradient_clip_val,
     )
     trainer.fit(model)
 
-    #model.load_from_checkpoint(checkpoint_callback.best_model_path)
-    #smiles_list = model.sample(hparams.test_num_samples, hparams.max_len, verbose=True)
-    #smiles_list_path = os.path.join(hparams.checkpoint_dir, "test.txt")
-    #Path(smiles_list_path).write_text("\n".join(smiles_list))
+    model.eval()
+    with torch.no_grad():
+        smiles_list, _ = model.sample(hparams.test_num_samples, hparams.max_len, verbose=True)
 
-    #metrics = moses.get_all_metrics(smiles_list, n_jobs=8, device="cuda:0", test=model.test_dataset.smiles_list)
-    #print(metrics)
-    #for key in metrics:
-    #    neptune_logger.experiment[f"moses/{key}"] = metrics[key]
+    smiles_list_path = os.path.join("../resource/checkpoint/", hparams.tag, "test.txt")
+    Path(smiles_list_path).write_text("\n".join(smiles_list))
+
+    metrics = moses.get_all_metrics(smiles_list, n_jobs=8, device="cuda:0", test=model.test_dataset.smiles_list)
+    print(metrics)
+    for key in metrics:
+        neptune_logger.experiment[f"moses/{key}"] = metrics[key]

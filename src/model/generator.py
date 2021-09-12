@@ -153,7 +153,7 @@ class BaseGenerator(nn.Module):
     def decode(self, num_samples, max_len, device):
         data_list = [Data() for _ in range(num_samples)]
         ended_data_list = []
-        for idx in tqdm(range(max_len)):
+        for idx in range(max_len):
             if len(data_list) == 0:
                 break
 
