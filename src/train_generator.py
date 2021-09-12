@@ -13,8 +13,8 @@ import moses
 
 from model.generator import BaseGenerator
 from data.dataset import ZincDataset, MosesDataset, PolymerDataset
-from data.data import TargetData
-from util import compute_sequence_cross_entropy, canonicalize
+from data.util import BOND_FEATURES, ATOM_OR_BOND_FEATURES, Data
+from util import compute_sequence_accuracy, compute_sequence_cross_entropy, canonicalize
 
 
 class BaseGeneratorLightningModule(pl.LightningModule):
@@ -28,24 +28,20 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
     def setup_datasets(self, hparams):
         dataset_cls = {"zinc": ZincDataset, "moses": MosesDataset, "polymer": PolymerDataset}.get(hparams.dataset_name)
-        self.train_dataset = dataset_cls("train")
+        self.train_dataset = dataset_cls("valid")
         self.val_dataset = dataset_cls("valid")
         self.test_dataset = dataset_cls("test")
         self.train_smiles_set = set(self.train_dataset.smiles_list)
-        self.tokenizer = self.train_dataset.tokenizer
-
-        self.collate = TargetData.collate
 
     def setup_model(self, hparams):
         self.model = BaseGenerator(
-            self.tokenizer,
-            hparams.num_encoder_layers,
-            hparams.emb_size,
-            hparams.nhead,
-            hparams.dim_feedforward,
-            hparams.dropout,
-            hparams.use_linedistance,
-        )
+            num_layers=hparams.num_layers,
+            emb_size=hparams.emb_size,
+            nhead=hparams.nhead,
+            dim_feedforward=hparams.dim_feedforward,
+            dropout=hparams.dropout,
+            logit_hidden_dim=hparams.logit_hidden_dim,
+       )
 
     ### Dataloaders and optimizers
     def train_dataloader(self):
@@ -53,7 +49,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             self.train_dataset,
             batch_size=self.hparams.batch_size,
             shuffle=True,
-            collate_fn=self.collate,
+            collate_fn=Data.collate,
             num_workers=self.hparams.num_workers,
         )
 
@@ -62,7 +58,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             self.val_dataset,
             batch_size=self.hparams.batch_size,
             shuffle=False,
-            collate_fn=self.collate,
+            collate_fn=Data.collate,
             num_workers=self.hparams.num_workers,
         )
 
@@ -73,14 +69,52 @@ class BaseGeneratorLightningModule(pl.LightningModule):
     ### Main steps
     def shared_step(self, batched_data):
         loss, statistics = 0.0, dict()
+        (
+            atom_or_bond_sequences, 
+            atom_id_sequences, 
+            bond_id_sequences, 
+            point_idx_sequences, 
+            adj_squares,
+            frontier_adj_squares, 
+        ) = batched_data
 
         # decoding
-        logits = self.model(batched_data)
-        recon_loss = compute_sequence_cross_entropy(logits, batched_data[0])
-        loss += recon_loss
+        atom_or_bond_logits, atom_id_logits, bond_id_and_end_logits = self.model(
+            atom_or_bond_sequences, 
+            atom_id_sequences, 
+            bond_id_sequences, 
+            point_idx_sequences, 
+            adj_squares,
+            frontier_adj_squares,
+            )
+        
+        atom_mask = atom_or_bond_sequences == ATOM_OR_BOND_FEATURES.index("<atom>")
+        bond_mask = atom_or_bond_sequences == ATOM_OR_BOND_FEATURES.index("<bond>")
+        
+        atom_or_bond_loss = compute_sequence_cross_entropy(atom_or_bond_logits, atom_or_bond_sequences)
+        
+        atom_id_targets = atom_id_sequences.masked_fill(~atom_mask, 0)
+        atom_id_loss = compute_sequence_cross_entropy(atom_id_logits, atom_id_targets)
+
+        bond_id_and_point_idx_targets = len(BOND_FEATURES) * point_idx_sequences + bond_id_sequences
+        bond_id_and_point_idx_targets[~bond_mask] = -1
+        bond_id_and_end_loss = compute_sequence_cross_entropy(
+            bond_id_and_end_logits, bond_id_and_point_idx_targets, ignore_index=-1
+            )
+
+        loss = atom_or_bond_loss + atom_id_loss + bond_id_and_end_loss
 
         statistics["loss/total"] = loss
-
+        statistics["loss/atom_or_bond"] = atom_or_bond_loss
+        statistics["loss/atom_id"] = atom_id_loss
+        statistics["loss/bond_id_and_end"] = bond_id_and_end_loss
+        
+        statistics["acc/atom_or_bond"] = compute_sequence_accuracy(atom_or_bond_logits, atom_or_bond_sequences)[0]
+        statistics["acc/atom_id"] = compute_sequence_accuracy(atom_id_logits, atom_id_targets)[0]
+        statistics["acc/bond_id_and_end"] = compute_sequence_accuracy(
+            bond_id_and_end_logits, bond_id_and_point_idx_targets, ignore_index=-1
+            )[0]
+                
         return loss, statistics
 
     def training_step(self, batched_data, batch_idx):
@@ -99,18 +133,22 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         return loss
 
     def validation_epoch_end(self, outputs):
-        num_samples = self.hparams.num_samples if self.sanity_checked else 2
-        max_len = self.hparams.max_len if self.sanity_checked else 10
-        maybe_smiles_list = self.sample(num_samples, max_len)
+        num_samples = self.hparams.num_samples if self.sanity_checked else 256
+        max_len = self.hparams.max_len if self.sanity_checked else 100
+        maybe_smiles_list, errors = self.sample(num_samples, max_len)
+
+        for error in errors:
+            self.logger.experiment["error"].log(f"{self.current_epoch}, {error}")
 
         smiles_list = []
         for maybe_smiles in maybe_smiles_list:
-            self.logger.experiment["smiles"].log(f"{self.current_epoch}, {maybe_smiles}")
-            
-            smiles = canonicalize(maybe_smiles)
+            self.logger.experiment["maybe_smiles"].log(f"{self.current_epoch}, {maybe_smiles}")            
+
+            smiles, error = canonicalize(maybe_smiles)
             if smiles is None:
-                self.logger.experiment["invalid_smiles"].log(f"{self.current_epoch}, {maybe_smiles}")
+                self.logger.experiment["invalid_smiles"].log(f"{self.current_epoch}, {maybe_smiles}, {error}")
             else:
+                self.logger.experiment["valid_smiles"].log(f"{self.current_epoch}, {maybe_smiles}")
                 smiles_list.append(smiles)
 
         unique_smiles_set = set(smiles_list)
@@ -125,39 +163,49 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             self.log(key, val, on_step=False, on_epoch=True, logger=True)
 
     def sample(self, num_samples, max_len, verbose=False):
+        offset = 0
         maybe_smiles_list = []
-        while len(maybe_smiles_list) < num_samples: 
+        errors = []
+        while offset < num_samples: 
+            cur_num_samples = min(num_samples - offset, self.hparams.sample_batch_size)
+            offset += cur_num_samples
             with torch.no_grad():
-                sample_batch_size = min(num_samples - len(maybe_smiles_list), self.hparams.sample_batch_size)
-                states = self.model.decode(
-                    sample_batch_size, 
-                    max_len=max_len, 
-                    device=self.device
-                    )
+                data_list = self.model.decode(cur_num_samples, max_len=max_len, device=self.device)
 
-            maybe_smiles_list += [state.get_smiles() for state in states]
+            for data in data_list:
+                if data.error is None:
+                    smiles, error = data.to_smiles()
+                    if error is None:
+                        maybe_smiles_list.append(smiles)
+                    else:
+                        errors.append(error)
+                else:
+                    errors.append(data.error)
+
             if verbose:
                 print(f"{len(maybe_smiles_list)} / {num_samples}")
-        
-        return maybe_smiles_list
+
+        print(errors)
+
+        return maybe_smiles_list, errors
 
     @staticmethod
     def add_args(parser):
-        parser.add_argument("--dataset_name", type=str, default="moses")
+        parser.add_argument("--dataset_name", type=str, default="zinc")
 
-        parser.add_argument("--num_encoder_layers", type=int, default=6)
+        parser.add_argument("--num_layers", type=int, default=6)
         parser.add_argument("--emb_size", type=int, default=1024)
         parser.add_argument("--nhead", type=int, default=8)
         parser.add_argument("--dim_feedforward", type=int, default=2048)
         parser.add_argument("--dropout", type=int, default=0.1)
-        parser.add_argument("--use_linedistance", action="store_true")
+        parser.add_argument("--logit_hidden_dim", type=int, default=256)
 
         parser.add_argument("--lr", type=float, default=1e-4)
         parser.add_argument("--batch_size", type=int, default=256)
         parser.add_argument("--num_workers", type=int, default=8)
 
         parser.add_argument("--max_len", type=int, default=250)
-        parser.add_argument("--num_samples", type=int, default=1024)
+        parser.add_argument("--num_samples", type=int, default=256)
         parser.add_argument("--sample_batch_size", type=int, default=256)
         parser.add_argument("--test_num_samples", type=int, default=30000)
         
@@ -174,30 +222,30 @@ if __name__ == "__main__":
     hparams = parser.parse_args()
 
     model = BaseGeneratorLightningModule(hparams)
-    model.load_state_dict(torch.load(hparams.load_checkpoint_path)["state_dict"])
+    #model.load_state_dict(torch.load(hparams.load_checkpoint_path)["state_dict"])
 
     neptune_logger = NeptuneLogger(project="sungsahn0215/molgen", close_after_fit=False)
     neptune_logger.run["params"] = vars(hparams)
     neptune_logger.run["sys/tags"].add(hparams.tag.split("_"))
-    checkpoint_callback = ModelCheckpoint(
-        dirpath=os.path.join("../resource/checkpoint/", hparams.tag), monitor="validation/loss/total", mode="min",
-    )
+    #checkpoint_callback = ModelCheckpoint(
+    #    dirpath=os.path.join("../resource/checkpoint/", hparams.tag), monitor="validation/loss/total", mode="min",
+    #)
     trainer = pl.Trainer(
         gpus=1,
         logger=neptune_logger,
         default_root_dir="../resource/log/",
         max_epochs=hparams.max_epochs,
-        callbacks=[checkpoint_callback],
+        #callbacks=[checkpoint_callback],
         gradient_clip_val=hparams.gradient_clip_val,
     )
     trainer.fit(model)
 
     #model.load_from_checkpoint(checkpoint_callback.best_model_path)
-    smiles_list = model.sample(hparams.test_num_samples, hparams.max_len, verbose=True)
-    smiles_list_path = os.path.join(hparams.checkpoint_dir, "test.txt")
-    Path(smiles_list_path).write_text("\n".join(smiles_list))
+    #smiles_list = model.sample(hparams.test_num_samples, hparams.max_len, verbose=True)
+    #smiles_list_path = os.path.join(hparams.checkpoint_dir, "test.txt")
+    #Path(smiles_list_path).write_text("\n".join(smiles_list))
 
-    metrics = moses.get_all_metrics(smiles_list, n_jobs=8, device="cuda:0", test=model.test_dataset.smiles_list)
-    print(metrics)
-    for key in metrics:
-        neptune_logger.experiment[f"moses/{key}"] = metrics[key]
+    #metrics = moses.get_all_metrics(smiles_list, n_jobs=8, device="cuda:0", test=model.test_dataset.smiles_list)
+    #print(metrics)
+    #for key in metrics:
+    #    neptune_logger.experiment[f"moses/{key}"] = metrics[key]
