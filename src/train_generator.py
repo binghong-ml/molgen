@@ -71,49 +71,51 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         loss, statistics = 0.0, dict()
         (
             atom_or_bond_sequences, 
-            atom_id_sequences, 
-            bond_id_sequences, 
-            point_idx_sequences, 
-            adj_squares,
-            frontier_adj_squares, 
+            atomid_sequences,
+            bondid_sequences,
+            queueid_sequences, 
+            adj_squares, 
+            atom_queue_id_squares, 
+            bond_queue_id_squares, 
         ) = batched_data
 
         # decoding
-        atom_or_bond_logits, atom_id_logits, bond_id_and_end_logits = self.model(
+        atom_or_bond_logits, atomid_logits, bondid_and_queueid_logits = self.model(
             atom_or_bond_sequences, 
-            atom_id_sequences, 
-            bond_id_sequences, 
-            point_idx_sequences, 
-            adj_squares,
-            frontier_adj_squares,
+            atomid_sequences,
+            bondid_sequences,
+            queueid_sequences, 
+            adj_squares, 
+            atom_queue_id_squares, 
+            bond_queue_id_squares,
             )
-        
-        atom_mask = atom_or_bond_sequences == ATOM_OR_BOND_FEATURES.index("<atom>")
-        bond_mask = atom_or_bond_sequences == ATOM_OR_BOND_FEATURES.index("<bond>")
         
         atom_or_bond_loss = compute_sequence_cross_entropy(atom_or_bond_logits, atom_or_bond_sequences)
+        atomid_loss = compute_sequence_cross_entropy(atomid_logits, atomid_sequences)
         
-        atom_id_targets = atom_id_sequences.masked_fill(~atom_mask, 0)
-        atom_id_loss = compute_sequence_cross_entropy(atom_id_logits, atom_id_targets)
-
-        bond_id_and_point_idx_targets = len(BOND_FEATURES) * point_idx_sequences + bond_id_sequences
-        bond_id_and_point_idx_targets[~bond_mask] = -1
-        bond_id_and_end_loss = compute_sequence_cross_entropy(
-            bond_id_and_end_logits, bond_id_and_point_idx_targets, ignore_index=-1
-            )
-
-        loss = atom_or_bond_loss + atom_id_loss + bond_id_and_end_loss
+        bondid_and_queueid_target = queueid_sequences * len(BOND_FEATURES) + bondid_sequences
+        bondid_and_queueid_target[bondid_sequences==BOND_FEATURES.index("<pad>")] = 0
+        bondid_and_queueid_loss = compute_sequence_cross_entropy(bondid_and_queueid_logits, bondid_and_queueid_target)
+        
+        loss = atom_or_bond_loss + atomid_loss + bondid_and_queueid_loss
 
         statistics["loss/total"] = loss
         statistics["loss/atom_or_bond"] = atom_or_bond_loss
-        statistics["loss/atom_id"] = atom_id_loss
-        statistics["loss/bond_id_and_end"] = bond_id_and_end_loss
+        statistics["loss/atomid"] = atomid_loss
+        statistics["loss/bondid_and_queueid"] = bondid_and_queueid_loss
         
-        statistics["acc/atom_or_bond"] = compute_sequence_accuracy(atom_or_bond_logits, atom_or_bond_sequences)[0]
-        statistics["acc/atom_id"] = compute_sequence_accuracy(atom_id_logits, atom_id_targets)[0]
-        statistics["acc/bond_id_and_end"] = compute_sequence_accuracy(
-            bond_id_and_end_logits, bond_id_and_point_idx_targets, ignore_index=-1
-            )[0]
+        statistics["acc/elem/atom_or_bond"] = compute_sequence_accuracy(atom_or_bond_logits, atom_or_bond_sequences)[0]
+        statistics["acc/elem/atomid"] = compute_sequence_accuracy(atomid_logits, atomid_sequences)[0]
+
+        pred = torch.argmax(bondid_and_queueid_logits[:, :-1], dim=-1)
+        bondid_pred = pred % len(BOND_FEATURES)
+        queueid_pred = pred // len(BOND_FEATURES)        
+        statistics["acc/elem/bondid"] = (
+            ((bondid_pred == bondid_sequences[:, 1:])[bondid_sequences[:, 1:] != 0]).float().mean()
+        )
+        statistics["acc/elem/queueid"] = (
+            ((queueid_pred == queueid_sequences[:, 1:])[queueid_sequences[:, 1:] != 0]).float().mean()
+        )
                 
         return loss, statistics
 
@@ -184,12 +186,14 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
             if verbose:
                 print(f"{len(maybe_smiles_list)} / {num_samples}")
+        
+        print(errors)
 
         return maybe_smiles_list, errors
 
     @staticmethod
     def add_args(parser):
-        parser.add_argument("--dataset_name", type=str, default="moses")
+        parser.add_argument("--dataset_name", type=str, default="zinc")
 
         parser.add_argument("--num_layers", type=int, default=6)
         parser.add_argument("--emb_size", type=int, default=1024)
@@ -203,7 +207,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--num_workers", type=int, default=8)
 
         parser.add_argument("--max_len", type=int, default=250)
-        parser.add_argument("--num_samples", type=int, default=1024)
+        parser.add_argument("--num_samples", type=int, default=256)
         parser.add_argument("--sample_batch_size", type=int, default=256)
         parser.add_argument("--test_num_samples", type=int, default=30000)
         
