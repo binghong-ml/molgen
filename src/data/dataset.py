@@ -5,9 +5,7 @@ import torch
 from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
 
-from data.util import smiles_to_tsrs, node_feature_names, edge_feature_names
-
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+from data.data import SourceData, TargetData
 
 DATA_DIR = "../resource/data"
 
@@ -107,4 +105,3 @@ class QEDDataset(LogP04Dataset):
     raw_dir = f"{DATA_DIR}/qed/raw"
 
 """
->>>>>>> 3ebd79571cbb9ff8c1bbcc71690e71bc6d494a24

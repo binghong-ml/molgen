@@ -4,8 +4,7 @@ from tokenizers import Token
 
 import torch
 from torch.nn.utils.rnn import pad_sequence
-
-from data.tokenize import get_tokentype, TokenType, tokenize
+from data.tokenize import 
 from copy import deepcopy
 
 TOKENS = [
