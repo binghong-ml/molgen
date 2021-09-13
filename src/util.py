@@ -1,4 +1,9 @@
+import sys
+from io import StringIO
+#sio = sys.stderr = StringIO()
+
 from rdkit import Chem, RDLogger
+Chem.WrapLogs()
 
 RDLogger.logger().setLevel(RDLogger.CRITICAL)
 
@@ -34,9 +39,6 @@ def canonicalize(smiles):
         mol = Chem.MolFromSmiles(smiles)
         smiles = Chem.MolToSmiles(mol)
     except:
-        return None
-
-    if len(smiles) == 0:
-        return None
+        smiles = None
 
     return smiles
