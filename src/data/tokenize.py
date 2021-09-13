@@ -51,14 +51,13 @@ def tokenize(smiles):
 
         tokens.append(token)
 
-    return " ".join(tokens)
+    return tokens
 
 
 def tokenize_with_singlebond(smiles):
     mol = Chem.MolFromSmiles(smiles)
     smiles = Chem.MolToSmiles(mol, allBondsExplicit=True)
     return tokenize(smiles)
-
 
 def get_tokentype(token):
     if token.startswith("[") or token in ORGANIC_ATOMS:
