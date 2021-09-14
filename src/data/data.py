@@ -76,6 +76,7 @@ TOKENS = [
     # appear during randomization
     "[H]",
     "[S@+]",
+    "[P@H]",
 ]
 
 ID2TOKEN = {id: token for id, token in enumerate(TOKENS)}
@@ -209,8 +210,9 @@ class TargetData(object):
             self.sequence.append(id)
     
     @staticmethod
-    def from_smiles(smiles, randomize=True):
+    def from_smiles(smiles, randomize):
         mol = Chem.MolFromSmiles(smiles)
+        print(randomize)
         if randomize:
             smiles = Chem.MolToSmiles(mol, doRandom=True, canonical=False, allBondsExplicit=True)
         else:

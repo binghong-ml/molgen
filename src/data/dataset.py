@@ -26,7 +26,11 @@ class ZincAutoEncoderDataset(ZincDataset):
     def __getitem__(self, idx):
         smiles = self.smiles_list[idx]
         
-        return SourceData.from_smiles(smiles).featurize(), TargetData.from_smiles(smiles).featurize(), smiles
+        return (
+            SourceData.from_smiles(smiles).featurize(), 
+            TargetData.from_smiles(smiles, randomize=self.randomize).featurize(), 
+            smiles
+        )
 
 class MosesDataset(ZincDataset):
     raw_dir = f"{DATA_DIR}/moses/raw"
