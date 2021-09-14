@@ -3,139 +3,16 @@
 
 import random
 import numpy as np
-from scipy import sparse
+from copy import copy
+
 import networkx as nx
 from networkx.algorithms.shortest_paths.generic import shortest_path
-import torch
 
-from rdkit import Chem
-from copy import copy
-# from rdkit import rdBase
-# rdBase.DisableLog('rdApp.error')
+import torch
 from torch.nn.utils.rnn import pad_sequence
 
+from data.tokenization import smiles2nx, nx2smiles
 
-ATOM_OR_BOND_FEATURES = ["<pad>", "<bos>", "<eos>", "<atom>", "<bond>"]
-
-ATOM_FEATURES = [
-    "<pad>",
-    (6, "CHI_TETRAHEDRAL_CCW", 0, 0),
-    (6, "CHI_TETRAHEDRAL_CCW", 0, 1),
-    (6, "CHI_TETRAHEDRAL_CW", 0, 0),
-    (6, "CHI_TETRAHEDRAL_CW", 0, 1),
-    (6, "CHI_UNSPECIFIED", -1, 1),
-    (6, "CHI_UNSPECIFIED", -1, 2),
-    (6, "CHI_UNSPECIFIED", 0, 0),
-    (7, "CHI_UNSPECIFIED", -1, 0),
-    (7, "CHI_UNSPECIFIED", -1, 1),
-    (7, "CHI_UNSPECIFIED", 0, 0),
-    (7, "CHI_UNSPECIFIED", 0, 1),
-    (7, "CHI_UNSPECIFIED", 1, 0),
-    (7, "CHI_UNSPECIFIED", 1, 1),
-    (7, "CHI_UNSPECIFIED", 1, 2),
-    (7, "CHI_UNSPECIFIED", 1, 3),
-    (8, "CHI_UNSPECIFIED", -1, 0),
-    (8, "CHI_UNSPECIFIED", 0, 0),
-    (8, "CHI_UNSPECIFIED", 1, 0),
-    (8, "CHI_UNSPECIFIED", 1, 1),
-    (9, "CHI_UNSPECIFIED", 0, 0),
-    (15, "CHI_TETRAHEDRAL_CCW", 0, 0),
-    (15, "CHI_TETRAHEDRAL_CW", 0, 0),
-    (15, "CHI_TETRAHEDRAL_CW", 0, 1),
-    (15, "CHI_UNSPECIFIED", 0, 0),
-    (15, "CHI_UNSPECIFIED", 0, 1),
-    (15, "CHI_UNSPECIFIED", 0, 2),
-    (15, "CHI_UNSPECIFIED", 1, 0),
-    (15, "CHI_UNSPECIFIED", 1, 1),
-    (16, "CHI_TETRAHEDRAL_CCW", 0, 0),
-    (16, "CHI_TETRAHEDRAL_CW", 0, 0),
-    (16, "CHI_TETRAHEDRAL_CW", 1, 0),
-    (16, "CHI_UNSPECIFIED", -1, 0),
-    (16, "CHI_UNSPECIFIED", 0, 0),
-    (16, "CHI_UNSPECIFIED", 1, 0),
-    (16, "CHI_UNSPECIFIED", 1, 1),
-    (17, "CHI_UNSPECIFIED", 0, 0),
-    (35, "CHI_UNSPECIFIED", 0, 0),
-    (53, "CHI_UNSPECIFIED", 0, 0),
-]
-
-BOND_FEATURES = [
-    "<pad>",
-    ("AROMATIC", "ENDDOWNRIGHT"),
-    ("AROMATIC", "ENDUPRIGHT"),
-    ("AROMATIC", "NONE"),
-    ("DOUBLE", "NONE"),
-    ("SINGLE", "ENDDOWNRIGHT"),
-    ("SINGLE", "ENDUPRIGHT"),
-    ("SINGLE", "NONE"),
-    ("TRIPLE", "NONE"),
-]
-
-QUEUE_FEATURES = ["<pad>"] + list(range(1, 50))
-
-CHIRAL_TAG_DICT = {
-    "CHI_UNSPECIFIED": Chem.rdchem.ChiralType.CHI_UNSPECIFIED,
-    "CHI_TETRAHEDRAL_CW": Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CW,
-    "CHI_TETRAHEDRAL_CCW": Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CCW,
-    "CHI_OTHER": Chem.rdchem.ChiralType.CHI_OTHER,
-}
-
-BOND_TYPE_DICT = {
-    "SINGLE": Chem.rdchem.BondType.SINGLE,
-    "DOUBLE": Chem.rdchem.BondType.DOUBLE,
-    "TRIPLE": Chem.rdchem.BondType.TRIPLE,
-    "AROMATIC": Chem.rdchem.BondType.AROMATIC,
-}
-
-BOND_DIR_DICT = {
-    "NONE": Chem.rdchem.BondDir.NONE,
-    "ENDUPRIGHT": Chem.rdchem.BondDir.ENDUPRIGHT,
-    "ENDDOWNRIGHT": Chem.rdchem.BondDir.ENDDOWNRIGHT,
-}
-
-def get_atom_feature(atom):
-    return atom.GetAtomicNum(), str(atom.GetChiralTag()), atom.GetFormalCharge(), atom.GetNumExplicitHs()
-
-def get_bond_feature(bond):
-    return str(bond.GetBondType()), str(bond.GetBondDir())
-
-def smiles_to_nx(smiles):
-    mol = Chem.MolFromSmiles(smiles)
-    G = nx.Graph()
-    for atom in mol.GetAtoms():
-        G.add_node(atom.GetIdx(), feature=get_atom_feature(atom))
-
-    for bond in mol.GetBonds():
-        G.add_edge(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx(), feature=get_bond_feature(bond))
-
-    return G
-
-def nx_to_smiles(G):
-    node_features = nx.get_node_attributes(G, "feature")
-    edge_features = nx.get_edge_attributes(G, "feature")
-    
-    mol = Chem.RWMol()
-    node_to_idx = dict()
-    for node in G.nodes():
-        atomic_num, chiral_tag, formal_charge, num_explicit_Hs = node_features[node]
-        a=Chem.Atom(atomic_num)
-        a.SetChiralTag(CHIRAL_TAG_DICT[chiral_tag])
-        a.SetFormalCharge(formal_charge)
-        a.SetNumExplicitHs(num_explicit_Hs)
-        idx = mol.AddAtom(a)
-        node_to_idx[node] = idx
-
-    for edge in G.edges():
-        bond_type, bond_dir = edge_features[edge]
-        first, second = edge
-        ifirst = node_to_idx[first]
-        isecond = node_to_idx[second]
-
-        mol.AddBond(ifirst, isecond, BOND_TYPE_DICT[bond_type])
-        mol.GetBondBetweenAtoms(ifirst, isecond).SetBondDir(BOND_DIR_DICT[bond_dir])
-
-    smiles = Chem.MolToSmiles(mol)
-    return smiles
 
 def pad_square(squares, padding_value=0):
     max_dim = max([square.size(0) for square in squares])
@@ -146,7 +23,19 @@ def pad_square(squares, padding_value=0):
     return batched_squares
 
 class Data:
-    def __init__(self, queue_scheme="bfs", max_queue_size=100):
+    def __init__(self):
+        self.tokens = []
+    
+    @staticmethod
+    def from_smiles(smiles):
+        G = smiles2nx(smiles)
+        
+        
+
+
+"""
+class Data:
+    def __init__(self, max_queue_size=100):
         self.node_cnt = -1
         self.ended = False
         self.error = None
@@ -521,167 +410,4 @@ class Data:
             atom_queueid_squares, 
             bond_queueid_squares,
             )
-
-
-"""
-def nx_to_sequence(G):
-    node_features = nx.get_node_attributes(G, "feature")
-    edge_features = nx.get_edge_attributes(G, "feature")
-    
-    sorted_nodes = sorted(G.nodes())
-    atom_or_bond_sequence = [ATOM_OR_BOND_FEATURES.index("<bos>")]
-    atomid_sequence = [ATOM_FEATURES.index("<bos>")]
-    bondid_sequence = [ATOM_FEATURES.index("<bos>")]
-    point_sequence = [-1]
-    edge_end_sequence = [-1]
-    
-    node_to_idx = dict()
-    for node in sorted_nodes:
-        atom_or_bond_sequence.append(ATOM_OR_BOND_FEATURES.index("<atom>"))
-        atomid_sequence.append(ATOM_FEATURES.index(node_features[node]))
-        bondid_sequence.append(BOND_FEATURES.index("<misc>"))    
-        edge_start_sequence.append(-1)
-        edge_end_sequence.append(-1)
-
-        node_to_idx[node] = len(atom_or_bond_sequence) - 1
-        for edge_end in G[node]:
-            if sorted_nodes.index(edge_end) < sorted_nodes.index(node):
-                atom_or_bond_sequence.append(ATOM_OR_BOND_FEATURES.index("<bond>"))
-                atomid_sequence.append(ATOM_FEATURES.index("<misc>"))
-                bondid_sequence.append(BOND_FEATURES.index(edge_features[(edge_end, node)]))
-                edge_start_sequence.append(node_to_idx[node])
-                edge_end_sequence.append(node_to_idx[edge_end])
-
-    atom_or_bond_sequence.append(ATOM_OR_BOND_FEATURES.index("<eos>"))
-    atomid_sequence.append(ATOM_FEATURES.index("<eos>"))
-    bondid_sequence.append(ATOM_FEATURES.index("<eos>"))
-    edge_start_sequence.append(-1)
-    edge_end_sequence.append(-1)
-
-    atom_or_bond_sequence = torch.LongTensor(atom_or_bond_sequence)
-    atomid_sequence = torch.LongTensor(atomid_sequence)
-    bondid_sequence = torch.LongTensor(bondid_sequence)
-    edge_start_sequence = torch.LongTensor(edge_start_sequence)
-    edge_end_sequence = torch.LongTensor(edge_end_sequence)
-
-    return atom_or_bond_sequence, atomid_sequence, bondid_sequence, edge_start_sequence, edge_end_sequence
-
-def sequence_to_nx(
-    atom_or_bond_sequence, atomid_sequence, bondid_sequence, edge_start_sequence, edge_end_sequence
-    ):
-    idx_to_atomidx = torch.cumsum(
-        (atom_or_bond_sequence == ATOM_OR_BOND_FEATURES.index("<atom>")), dim=0
-        )
-    idx_to_atomidx = (idx_to_atomidx - 1).tolist()
-
-    atom_or_bond_sequence = atom_or_bond_sequence.tolist()[1:-1]
-    atomid_sequence = atomid_sequence.tolist()[1:-1]
-    bondid_sequence = bondid_sequence.tolist()[1:-1]
-    edge_start_sequence = edge_start_sequence.tolist()[1:-1]
-    edge_end_sequence = edge_end_sequence.tolist()[1:-1]
-    
-    node = -1 
-    G = nx.Graph()
-    node_attributes = dict()
-    edge_attributes = dict()
-    for atom_or_bond, atomid, bondid, edge_start, edge_end in zip(
-        atom_or_bond_sequence, atomid_sequence, bondid_sequence, edge_start_sequence, edge_end_sequence
-        ):
-        if ATOM_OR_BOND_FEATURES[atom_or_bond] == "<atom>":
-            node += 1
-            G.add_node(node)
-            node_attributes[node] = ATOM_FEATURES[atomid]
-        
-        elif ATOM_OR_BOND_FEATURES[atom_or_bond] == "<bond>":
-            G.add_edge(idx_to_atomidx[edge_end], idx_to_atomidx[edge_start])
-            edge_attributes[idx_to_atomidx[edge_end], idx_to_atomidx[edge_start]] = BOND_FEATURES[bondid]
-    
-
-    nx.set_node_attributes(G, node_attributes, 'feature')
-    nx.set_edge_attributes(G, edge_attributes, 'feature')
-
-    return G
-"""
-
-"""
-def nx_to_tsrs(G):
-    nodes = sorted(G.nodes())
-    atomic_nums = nx.get_node_attributes(G, 'atomic_num')
-    chiral_tags = nx.get_node_attributes(G, 'chiral_tag')
-    formal_charges = nx.get_node_attributes(G, 'formal_charge')
-    num_explicit_Hss = nx.get_node_attributes(G, 'num_explicit_Hs')
-    
-    atomic_nums_tsr = torch.LongTensor(np.array([atomic_nums[node] for node in nodes]))
-    chiral_tags_tsr = torch.LongTensor(np.array([chiral_tags[node] for node in nodes]))
-    formal_charges_tsr = torch.LongTensor(np.array([formal_charges[node] for node in nodes]))
-    num_explicit_Hss_tsr = torch.LongTensor(np.array([num_explicit_Hss[node] for node in nodes]))
-
-    node_tsrs = {
-        'atomic_num': atomic_nums_tsr, 
-        'chiral_tag': chiral_tags_tsr, 
-        'formal_charge': formal_charges_tsr, 
-        'num_explicit_Hs': num_explicit_Hss_tsr
-        }
-
-    #adj_np = nx.convert_matrix.to_numpy_array(G, dtype=np.int)
-    #adj_tsr = torch.LongTensor(adj_np)
-    shortestpath_len = torch.LongTensor(nx.algorithms.shortest_paths.dense.floyd_warshall_numpy(G))
-    bond_type_tsr = torch.LongTensor(nx.convert_matrix.to_numpy_array(G, weight='bond_type', dtype=np.int))
-    bond_dir_tsr = torch.LongTensor(nx.convert_matrix.to_numpy_array(G, weight='bond_dir', dtype=np.int))
-    bond_type_tsr[bond_type_tsr == 0] = FEATURES['bond_type'].index("<nobond>")
-    bond_dir_tsr[bond_dir_tsr == 0] = FEATURES['bond_dir'].index("<nobond>")
-    
-    #bondidx_tsr = torch.LongTensor(nx.convert_matrix.to_numpy_array(G, weight='bondidx', dtype=np.int))
-    edge_tsrs = {
-        #'adj': adj_tsr,
-        'bond_type': bond_type_tsr, 
-        'bond_dir': bond_dir_tsr,
-        'shortest_path': shortestpath_len,
-        #'bondidx': bondidx_tsr,
-        }
-    
-    return node_tsrs, edge_tsrs
-
-def tsrs_to_nx(node_tsrs, edge_tsrs):
-    mask = node_tsrs['atomic_num'] != FEATURES['atomic_num'].index('<pad>')
-    for key in node_tsrs:
-        node_tsrs[key] = node_tsrs[key][mask]
-    
-    for key in edge_tsrs:
-        edge_tsrs[key] = edge_tsrs[key][mask][:, mask]
-
-    
-    adj = (edge_tsrs['bond_type'] != FEATURES['bond_type'].index("<nobond>"))
-    G = nx.from_numpy_array(adj.numpy())
-    for node in G.nodes():
-        for key, val in node_tsrs.items():
-            G.nodes[node][key] = val[node]
-
-    for edge in G.edges():
-        for key, val in edge_tsrs.items():
-            G.edges[edge][key] = val[edge]
-
-    return G
-
-
-def nx_to_smiles(G):
-    mol = nx_to_mol(G)
-    smiles = Chem.MolToSmiles(mol)
-    return smiles
-
-def smiles_to_tsrs(smiles):
-    mol = Chem.MolFromSmiles(smiles)
-    G = mol_to_nx(mol)
-    tsrs = nx_to_tsrs(G)
-    return tsrs
-
-def tsrs_to_smiles(node_tsrs, edge_tsrs):
-    G = tsrs_to_nx(node_tsrs, edge_tsrs)
-    try:
-        mol = nx_to_mol(G)
-        smiles = Chem.MolToSmiles(mol)
-        return smiles
-    except:
-        return None
-    
 """
