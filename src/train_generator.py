@@ -13,7 +13,7 @@ import moses
 
 from model.generator import BaseGenerator
 from data.dataset import ZincDataset, MosesDataset, PolymerDataset
-from data.util import BOND_FEATURES, ATOM_OR_BOND_FEATURES, Data
+from data.util import RING_TOKENS, Data, get_value_id
 from util import compute_sequence_accuracy, compute_sequence_cross_entropy, canonicalize
 
 
@@ -40,7 +40,6 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             nhead=hparams.nhead,
             dim_feedforward=hparams.dim_feedforward,
             dropout=hparams.dropout,
-            logit_hidden_dim=hparams.logit_hidden_dim,
        )
 
     ### Dataloaders and optimizers
@@ -69,54 +68,27 @@ class BaseGeneratorLightningModule(pl.LightningModule):
     ### Main steps
     def shared_step(self, batched_data):
         loss, statistics = 0.0, dict()
-        (
-            atom_or_bond_sequences, 
-            atomid_sequences,
-            bondid_sequences,
-            queueid_sequences, 
-            adj_squares, 
-            atom_queue_id_squares, 
-            bond_queue_id_squares, 
-        ) = batched_data
+        val_sequences, ring_sequences, distance_squares = batched_data
 
         # decoding
-        atom_or_bond_logits, atomid_logits, bondid_and_queueid_logits = self.model(
-            atom_or_bond_sequences, 
-            atomid_sequences,
-            bondid_sequences,
-            queueid_sequences, 
-            adj_squares, 
-            atom_queue_id_squares, 
-            bond_queue_id_squares,
-            )
+        logits = self.model(val_sequences, ring_sequences, distance_squares)
         
-        atom_or_bond_loss = compute_sequence_cross_entropy(atom_or_bond_logits, atom_or_bond_sequences)
-        atomid_loss = compute_sequence_cross_entropy(atomid_logits, atomid_sequences)
+        targets = val_sequences * len(RING_TOKENS) + ring_sequences
+        targets[val_sequences==get_value_id("<pad>")] = 0
+        loss = compute_sequence_cross_entropy(logits, targets, ignore_index=0)
         
-        bondid_and_queueid_target = queueid_sequences * len(BOND_FEATURES) + bondid_sequences
-        bondid_and_queueid_target[bondid_sequences==BOND_FEATURES.index("<pad>")] = 0
-        bondid_and_queueid_loss = compute_sequence_cross_entropy(bondid_and_queueid_logits, bondid_and_queueid_target)
-        
-        loss = atom_or_bond_loss + atomid_loss + bondid_and_queueid_loss
-
         statistics["loss/total"] = loss
-        statistics["loss/atom_or_bond"] = atom_or_bond_loss
-        statistics["loss/atomid"] = atomid_loss
-        statistics["loss/bondid_and_queueid"] = bondid_and_queueid_loss
         
-        statistics["acc/elem/atom_or_bond"] = compute_sequence_accuracy(atom_or_bond_logits, atom_or_bond_sequences)[0]
-        statistics["acc/elem/atomid"] = compute_sequence_accuracy(atomid_logits, atomid_sequences)[0]
-
-        pred = torch.argmax(bondid_and_queueid_logits[:, :-1], dim=-1)
-        bondid_pred = pred % len(BOND_FEATURES)
-        queueid_pred = pred // len(BOND_FEATURES)        
-        statistics["acc/elem/bondid"] = (
-            ((bondid_pred == bondid_sequences[:, 1:])[bondid_sequences[:, 1:] != 0]).float().mean()
+        pred = torch.argmax(logits[:, :-1], dim=-1)
+        val_pred = pred % len(RING_TOKENS)
+        ring_pred = pred // len(RING_TOKENS)        
+        
+        statistics["acc/elem/value"] = (
+            ((val_pred == val_sequences[:, 1:])[val_sequences[:, 1:] != 0]).float().mean()
         )
-        statistics["acc/elem/queueid"] = (
-            ((queueid_pred == queueid_sequences[:, 1:])[queueid_sequences[:, 1:] != 0]).float().mean()
+        statistics["acc/elem/ring"] = (
+            ((ring_pred == ring_sequences[:, 1:])[ring_sequences[:, 1:] != 0]).float().mean()
         )
-                
         return loss, statistics
 
     def training_step(self, batched_data, batch_idx):
@@ -176,19 +148,17 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
             for data in data_list:
                 if data.error is None:
-                    smiles, error = data.to_smiles()
-                    if error is None:
+                    try:
+                        smiles = data.to_smiles()
                         maybe_smiles_list.append(smiles)
-                    else:
-                        errors.append(error)
+                    except Exception as e:
+                        errors.append(e)
                 else:
                     errors.append(data.error)
 
             if verbose:
                 print(f"{len(maybe_smiles_list)} / {num_samples}")
         
-        print(errors)
-
         return maybe_smiles_list, errors
 
     @staticmethod
@@ -228,15 +198,15 @@ if __name__ == "__main__":
     neptune_logger = NeptuneLogger(project="sungsahn0215/molgen", close_after_fit=False)
     neptune_logger.run["params"] = vars(hparams)
     neptune_logger.run["sys/tags"].add(hparams.tag.split("_"))
-    checkpoint_callback = ModelCheckpoint(
-        dirpath=os.path.join("../resource/checkpoint/", hparams.tag), monitor="validation/loss/total", mode="min",
-    )
+    #checkpoint_callback = ModelCheckpoint(
+    #    dirpath=os.path.join("../resource/checkpoint/", hparams.tag), monitor="validation/loss/total", mode="min",
+    #)
     trainer = pl.Trainer(
         gpus=1,
         logger=neptune_logger,
         default_root_dir="../resource/log/",
         max_epochs=hparams.max_epochs,
-        callbacks=[checkpoint_callback],
+        #callbacks=[checkpoint_callback],
         gradient_clip_val=hparams.gradient_clip_val,
     )
     trainer.fit(model)
