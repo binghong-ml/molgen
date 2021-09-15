@@ -5,121 +5,13 @@ from rdkit import Chem
 from itertools import product, combinations
 from collections import defaultdict
 import random
+from data.smiles import smiles2nx, nx2smiles
 
-CHIRAL_TAG_DICT = {
-    "CHI_UNSPECIFIED": Chem.rdchem.ChiralType.CHI_UNSPECIFIED,
-    "CHI_TETRAHEDRAL_CW": Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CW,
-    "CHI_TETRAHEDRAL_CCW": Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CCW,
-    "CHI_OTHER": Chem.rdchem.ChiralType.CHI_OTHER,
-}
+SPECIAL_TOKENS = ["<pad>", "<mask>", "<bos>", "<eos>"]
+RING_TOKENS = [f"<ring_start_{idx}>" for idx in range(20)]
+BRANCH_TOKENS = ["<branch_start>", "<branch_end>"]
 
-BOND_TYPE_DICT = {
-    "SINGLE": Chem.rdchem.BondType.SINGLE,
-    "DOUBLE": Chem.rdchem.BondType.DOUBLE,
-    "TRIPLE": Chem.rdchem.BondType.TRIPLE,
-    "AROMATIC": Chem.rdchem.BondType.AROMATIC,
-}
-
-BOND_DIR_DICT = {
-    "NONE": Chem.rdchem.BondDir.NONE,
-    "ENDUPRIGHT": Chem.rdchem.BondDir.ENDUPRIGHT,
-    "ENDDOWNRIGHT": Chem.rdchem.BondDir.ENDDOWNRIGHT,
-}
-
-
-SPECIAL_TOKENS = [("SPECIAL", "<pad>"), ("SPECIAL", "<mask>"), ("SPECIAL", "<bos>"), ("SPECIAL", "<eos>")]
-ATOM_TOKENS = [
-    ("ATOM", 6, "CHI_TETRAHEDRAL_CCW", 0, 0),
-    ("ATOM", 6, "CHI_TETRAHEDRAL_CCW", 0, 1),
-    ("ATOM", 6, "CHI_TETRAHEDRAL_CW", 0, 0),
-    ("ATOM", 6, "CHI_TETRAHEDRAL_CW", 0, 1),
-    ("ATOM", 6, "CHI_UNSPECIFIED", -1, 1),
-    ("ATOM", 6, "CHI_UNSPECIFIED", -1, 2),
-    ("ATOM", 6, "CHI_UNSPECIFIED", 0, 0),
-    ("ATOM", 7, "CHI_UNSPECIFIED", -1, 0),
-    ("ATOM", 7, "CHI_UNSPECIFIED", -1, 1),
-    ("ATOM", 7, "CHI_UNSPECIFIED", 0, 0),
-    ("ATOM", 7, "CHI_UNSPECIFIED", 0, 1),
-    ("ATOM", 7, "CHI_UNSPECIFIED", 1, 0),
-    ("ATOM", 7, "CHI_UNSPECIFIED", 1, 1),
-    ("ATOM", 7, "CHI_UNSPECIFIED", 1, 2),
-    ("ATOM", 7, "CHI_UNSPECIFIED", 1, 3),
-    ("ATOM", 8, "CHI_UNSPECIFIED", -1, 0),
-    ("ATOM", 8, "CHI_UNSPECIFIED", 0, 0),
-    ("ATOM", 8, "CHI_UNSPECIFIED", 1, 0),
-    ("ATOM", 8, "CHI_UNSPECIFIED", 1, 1),
-    ("ATOM", 9, "CHI_UNSPECIFIED", 0, 0),
-    ("ATOM", 15, "CHI_TETRAHEDRAL_CCW", 0, 0),
-    ("ATOM", 15, "CHI_TETRAHEDRAL_CW", 0, 0),
-    ("ATOM", 15, "CHI_TETRAHEDRAL_CW", 0, 1),
-    ("ATOM", 15, "CHI_UNSPECIFIED", 0, 0),
-    ("ATOM", 15, "CHI_UNSPECIFIED", 0, 1),
-    ("ATOM", 15, "CHI_UNSPECIFIED", 0, 2),
-    ("ATOM", 15, "CHI_UNSPECIFIED", 1, 0),
-    ("ATOM", 15, "CHI_UNSPECIFIED", 1, 1),
-    ("ATOM", 16, "CHI_TETRAHEDRAL_CCW", 0, 0),
-    ("ATOM", 16, "CHI_TETRAHEDRAL_CW", 0, 0),
-    ("ATOM", 16, "CHI_TETRAHEDRAL_CW", 1, 0),
-    ("ATOM", 16, "CHI_UNSPECIFIED", -1, 0),
-    ("ATOM", 16, "CHI_UNSPECIFIED", 0, 0),
-    ("ATOM", 16, "CHI_UNSPECIFIED", 1, 0),
-    ("ATOM", 16, "CHI_UNSPECIFIED", 1, 1),
-    ("ATOM", 17, "CHI_UNSPECIFIED", 0, 0),
-    ("ATOM", 35, "CHI_UNSPECIFIED", 0, 0),
-    ("ATOM", 53, "CHI_UNSPECIFIED", 0, 0),
-]
-BOND_TOKENS = [
-    ("BOND", "AROMATIC", "ENDDOWNRIGHT"),
-    ("BOND", "AROMATIC", "ENDUPRIGHT"),
-    ("BOND", "AROMATIC", "NONE"),
-    ("BOND", "TRIPLE", "NONE"),
-    ("BOND", "DOUBLE", "NONE"),
-    ("BOND", "SINGLE", "ENDDOWNRIGHT"),
-    ("BOND", "SINGLE", "ENDUPRIGHT"),
-    ("BOND", "SINGLE", "NONE"),
-    ("BOND", "<nobond>"),
-]
-VAL_TOKENS = SPECIAL_TOKENS + ATOM_TOKENS + BOND_TOKENS
-ID2VAL_TOKEN = {id: token for id, token in enumerate(VAL_TOKENS)}
-VAL_TOKEN2ID = {token: id for id, token in enumerate(VAL_TOKENS)}
-
-POS_TOKENS = SPECIAL_TOKENS + [("ANCHOR", idx) for idx in range(-1, 50)]
-ID2POS_TOKEN = {id: token for id, token in enumerate(POS_TOKENS)}
-POS_TOKEN2ID = {token: id for id, token in enumerate(POS_TOKENS)}
-
-def get_pad_token():
-    return ("SPECIAL", "<pad>")
-
-def get_bos_token():
-    return ("SPECIAL", "<bos>")
-
-def get_eos_token():
-    return ("SPECIAL", "<eos>")
-
-def get_nobond_token():
-    return ("BOND", "<nobond>")
-
-def get_atom_token(atom):
-    return ("ATOM", atom.GetAtomicNum(), str(atom.GetChiralTag()), atom.GetFormalCharge(), atom.GetNumExplicitHs())
-
-def get_bond_token(bond):
-    return ("BOND", str(bond.GetBondType()), str(bond.GetBondDir()))
-
-def get_pos_token(idx):
-    return ("ANCHOR", idx)
-
-def smiles2nx(smiles):
-    mol = Chem.MolFromSmiles(smiles)
-    G = nx.Graph()
-    for atom in mol.GetAtoms():
-        G.add_node(atom.GetIdx(), token=get_atom_token(atom))
-
-    for bond in mol.GetBonds():
-        G.add_edge(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx(), token=get_bond_token(bond))
-
-    return G
-
-def nx2sequence(G):
+def molgraph2moltree(molgraph):
     nodes = list(G.nodes())
     eulerized_G = nx.eulerize(G.copy())
     source_node = random.choice(nodes)
@@ -186,7 +78,7 @@ def nx2smiles(G):
     for node in G.nodes():
         _, atomic_num, chiral_tag, formal_charge, num_explicit_Hs = node_features[node]
         a=Chem.Atom(atomic_num)
-        a.SetChiralTag(CHIRAL_TAG_DICT[chiral_tag])
+        a.SetChiralTag(chiral_tag)
         a.SetFormalCharge(formal_charge)
         a.SetNumExplicitHs(num_explicit_Hs)
         idx = mol.AddAtom(a)
