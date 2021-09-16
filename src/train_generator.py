@@ -163,7 +163,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
     def add_args(parser):
         parser.add_argument("--dataset_name", type=str, default="zinc")
 
-        parser.add_argument("--num_layers", type=int, default=3)
+        parser.add_argument("--num_layers", type=int, default=6)
         parser.add_argument("--emb_size", type=int, default=1024)
         parser.add_argument("--nhead", type=int, default=8)
         parser.add_argument("--dim_feedforward", type=int, default=2048)

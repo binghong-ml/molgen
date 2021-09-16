@@ -5,7 +5,7 @@ import math
 
 from tqdm import tqdm
 
-from data.util import PAD_TOKEN, RING_TOKENS, TOKENS, Data, get_id
+from data.util import PAD_TOKEN, TOKENS, Data, get_id
 # helper Module to convert tensor of input indices into corresponding tensor of token embeddings
 class TokenEmbedding(nn.Module):
     def __init__(self, vocab_size, emb_size):

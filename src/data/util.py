@@ -27,8 +27,9 @@ BOND_TOKENS = [token for token in TOKEN2BONDFEAT]
 BRANCH_START_TOKEN = "("
 BRANCH_END_TOKEN = ")"
 BRANCH_TOKENS = [BRANCH_START_TOKEN, BRANCH_END_TOKEN]
-RING_TOKENS = [f"[R{idx}]" for idx in range(20)]
-TOKENS = SPECIAL_TOKENS + ATOM_TOKENS + BOND_TOKENS + BRANCH_TOKENS + RING_TOKENS
+RING_START_TOKENS = [f"[bor{idx}]" for idx in range(20)]
+RING_END_TOKENS = [f"[eor{idx}]" for idx in range(20)]
+TOKENS = SPECIAL_TOKENS + ATOM_TOKENS + BOND_TOKENS + BRANCH_TOKENS + RING_START_TOKENS + RING_END_TOKENS
 
 def get_id(token):
     return TOKENS.index(token)
@@ -36,11 +37,15 @@ def get_id(token):
 def get_token(id):
     return TOKENS[id]
 
-def get_ring_token(idx):
-    return f"[R{idx}]"
+def get_ring_start_token(idx):
+    return f"[bor{idx}]"
+
+def get_ring_end_token(idx):
+    return f"[eor{idx}]"
 
 def get_ring_idx(token):
-    return RING_TOKENS.index(token)
+    ring_idx = RING_START_TOKENS.index(token) if token in RING_START_TOKENS else RING_END_TOKENS.index(token)
+    return ring_idx
 
 class Data:
     def __init__(self):
@@ -52,7 +57,7 @@ class Data:
 
         self._node_offset = -1
         self.branch_start_nodes = []
-        self.ring_idx_to_nodes = defaultdict(list)
+        self.ring_idx_to_nodes = dict()
         
         self.pointer_node = None
         self.ended = False
@@ -75,7 +80,7 @@ class Data:
         self.G.add_node(new_node)
         self.position_G.add_node(new_node)
         
-        if token in ATOM_TOKENS + BOND_TOKENS + RING_TOKENS:
+        if token in ATOM_TOKENS + BOND_TOKENS + RING_START_TOKENS + RING_END_TOKENS:
             self.add_regular_token(new_node, token)
         elif token == BRANCH_START_TOKEN:
             self.add_branch_start_token(new_node)
@@ -92,11 +97,16 @@ class Data:
 
     def add_regular_token(self, new_node, token):
         if self.pointer_node is not None:
-            if token in (ATOM_TOKENS + RING_TOKENS) and self.tokens[self.pointer_node] in (ATOM_TOKENS + RING_TOKENS):
+            if (
+                token in (ATOM_TOKENS + RING_START_TOKENS + RING_END_TOKENS) 
+                and self.tokens[self.pointer_node] in (ATOM_TOKENS + RING_START_TOKENS + RING_END_TOKENS)
+            ):
                 self.set_error("consecutive atom tokens")
+                return
 
             if token in BOND_TOKENS and self.tokens[self.pointer_node] in BOND_TOKENS:
                 self.set_error("consecutive bond tokens")
+                return
 
             self.G.add_edge(self.pointer_node, new_node)
 
@@ -106,10 +116,23 @@ class Data:
         
         self.pointer_node = new_node
 
-        if token in RING_TOKENS:
+        if token in RING_START_TOKENS:
             ring_idx = get_ring_idx(token)
+            if ring_idx in self.ring_idx_to_nodes:
+                self.set_error("duplicate ring idx")
+                return 
+
+            self.ring_idx_to_nodes[ring_idx] = [new_node]
+
+        if token in RING_END_TOKENS:
+            ring_idx = get_ring_idx(token)
+            if ring_idx not in self.ring_idx_to_nodes:
+                self.set_error("<eor> before <bor>")
+                return
+
             if len(self.ring_idx_to_nodes[ring_idx]) == 2:
                 self.set_error("more than 2 nodes with same ring_idx")
+                return
 
             self.ring_idx_to_nodes[ring_idx].append(new_node)
 
@@ -146,7 +169,7 @@ class Data:
             self.set_error(") at depth 0.")
             return
             
-        if self.tokens[self.pointer_node] not in (ATOM_TOKENS + RING_TOKENS):
+        if self.tokens[self.pointer_node] not in (ATOM_TOKENS + RING_START_TOKENS + RING_END_TOKENS):
             self.set_error(") after non-atom")
             return
 
@@ -181,7 +204,7 @@ class Data:
                 self.set_error("[eos] added before all ring closed.")
                 return
 
-        if self.tokens[self.pointer_node] not in (ATOM_TOKENS + RING_TOKENS):
+        if self.tokens[self.pointer_node] not in (ATOM_TOKENS + RING_START_TOKENS + RING_END_TOKENS):
             self.set_error("ended with non-atom token")
             return
         
@@ -228,7 +251,7 @@ class Data:
         molgraph = nx.Graph()
         for node in mollinegraph:
             token = self.tokens[node]
-            if token in ATOM_TOKENS + RING_TOKENS:
+            if token in ATOM_TOKENS + RING_START_TOKENS + RING_END_TOKENS:
                 molgraph.add_node(node, token=token)
         
         for node in mollinegraph:
@@ -266,6 +289,13 @@ class Data:
         start = min(molgraph.nodes, key=keyfunc)
         
         dfs_successors = dict(nx.dfs_successors(molgraph, source=start))
+        
+        dfs_traj = []
+        to_visit = [start]
+        while to_visit:
+            current = to_visit.pop()
+            dfs_traj.append(current)
+            to_visit += dfs_successors.get(current, [])
 
         edges = set()
         for n_idx, n_jdxs in dfs_successors.items():
@@ -274,16 +304,20 @@ class Data:
         
         ring_edges = [edge for edge in molgraph.edges if tuple(edge) not in edges]
 
-        ring_nodes = list(range(molgraph.number_of_nodes(), molgraph.number_of_nodes() + len(ring_edges)))
-        for idx, (ring_node, edge) in enumerate(zip(ring_nodes, ring_edges)):
+        node_offset = molgraph.number_of_nodes()
+        for idx, edge in enumerate(ring_edges):
             node0, node1 = edge
+            node0, node1 = sorted([node0, node1], key=dfs_traj.index)
+            ring_node0, ring_node1 = node_offset, node_offset+1
+            node_offset += 2
 
-            atom_tokens[ring_node] = get_ring_token(idx)
-            bond_tokens[node0, ring_node] = bond_tokens[node0, node1]
-            bond_tokens[node1, ring_node] = bond_tokens[node0, node1]
+            atom_tokens[ring_node0] = get_ring_start_token(idx)
+            atom_tokens[ring_node1] = get_ring_end_token(idx)
+            bond_tokens[node0, ring_node0] = bond_tokens[node0, node1]
+            bond_tokens[node1, ring_node1] = bond_tokens[node0, node1]
 
-            dfs_successors[node0] = [ring_node] + dfs_successors.get(node0, [])
-            dfs_successors[node1] = [ring_node] + dfs_successors.get(node1, [])
+            dfs_successors[node0] = [ring_node0] + dfs_successors.get(node0, [])
+            dfs_successors[node1] = [ring_node1] + dfs_successors.get(node1, [])
 
         dfs_predecessors = dict()
         for node0 in dfs_successors:
