@@ -1,10 +1,10 @@
 from rdkit import Chem
 from tqdm import tqdm
 from pathlib import Path
-from data.util import Data, smiles_to_nx, nx_to_smiles
-import networkx as nx
-import json
+from data.util import Data
 
+def canonicalize(smiles):
+    return Chem.MolToSmiles(Chem.MolFromSmiles(smiles))
 seen_node_feats = set()
 seen_edge_feats = set()
 for smiles_list_dir in ["../resource/data/moses/raw", "../resource/data/zinc/raw/"]:
@@ -13,13 +13,27 @@ for smiles_list_dir in ["../resource/data/moses/raw", "../resource/data/zinc/raw
         smiles_list = Path(smiles_list_path).read_text(encoding="utf-8").splitlines()
         for smiles in tqdm(smiles_list):
             smiles = Chem.MolToSmiles(Chem.MolFromSmiles(smiles))
-            
             #G = smiles_to_nx(smiles)
             #node_or_edge_sequence, node_sequence, edge_sequence, edge_start_sequence, edge_end_sequence = nx_to_sequence(G)
             #G = sequence_to_nx(node_or_edge_sequence, node_sequence, edge_sequence, edge_start_sequence, edge_end_sequence)
             #recon_smiles = nx_to_smiles(G)
             data = Data.from_smiles(smiles)
-            recon_smiles = data.to_smiles()
-            
-            if smiles != recon_smiles:
+            if data.error is not None:
+                print(data.error)
                 assert False
+
+            recon_smiles, error = data.to_smiles()
+            if error is not None:
+                print(error)
+                assert False
+                
+            if canonicalize(recon_smiles) != canonicalize(smiles):
+                print(smiles, recon_smiles)
+                assert False
+            
+            print(data.featurize()[-1][:30, :30])
+            assert False
+            #recon_smiles = data.to_smiles()
+            
+            #if smiles != recon_smiles:
+            #    assert False

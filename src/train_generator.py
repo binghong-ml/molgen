@@ -13,7 +13,7 @@ import moses
 
 from model.generator import BaseGenerator
 from data.dataset import ZincDataset, MosesDataset, PolymerDataset
-from data.util import RING_TOKENS, Data, get_value_id
+from data.util import Data
 from util import compute_sequence_accuracy, compute_sequence_cross_entropy, canonicalize
 
 
@@ -40,6 +40,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             nhead=hparams.nhead,
             dim_feedforward=hparams.dim_feedforward,
             dropout=hparams.dropout,
+            disable_loc=hparams.disable_loc,
        )
 
     ### Dataloaders and optimizers
@@ -68,27 +69,13 @@ class BaseGeneratorLightningModule(pl.LightningModule):
     ### Main steps
     def shared_step(self, batched_data):
         loss, statistics = 0.0, dict()
-        val_sequences, ring_sequences, distance_squares = batched_data
 
         # decoding
-        logits = self.model(val_sequences, ring_sequences, distance_squares)
+        logits = self.model(batched_data)        
+        loss = compute_sequence_cross_entropy(logits, batched_data[0], ignore_index=0)
+        statistics["loss/total"] = loss 
+        statistics["acc/total"] = compute_sequence_accuracy(logits, batched_data[0], ignore_index=0)[0]
         
-        targets = val_sequences * len(RING_TOKENS) + ring_sequences
-        targets[val_sequences==get_value_id("<pad>")] = 0
-        loss = compute_sequence_cross_entropy(logits, targets, ignore_index=0)
-        
-        statistics["loss/total"] = loss
-        
-        pred = torch.argmax(logits[:, :-1], dim=-1)
-        val_pred = pred % len(RING_TOKENS)
-        ring_pred = pred // len(RING_TOKENS)        
-        
-        statistics["acc/elem/value"] = (
-            ((val_pred == val_sequences[:, 1:])[val_sequences[:, 1:] != 0]).float().mean()
-        )
-        statistics["acc/elem/ring"] = (
-            ((ring_pred == ring_sequences[:, 1:])[ring_sequences[:, 1:] != 0]).float().mean()
-        )
         return loss, statistics
 
     def training_step(self, batched_data, batch_idx):
@@ -108,8 +95,12 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
     def validation_epoch_end(self, outputs):
         num_samples = self.hparams.num_samples if self.sanity_checked else 256
-        max_len = self.hparams.max_len if self.sanity_checked else 100
-        maybe_smiles_list, errors = self.sample(num_samples, max_len)
+        max_len = self.hparams.max_len if self.sanity_checked else 10
+        maybe_smiles_list, tokens_list, errors = self.sample(num_samples, max_len)
+
+        for tokens in tokens_list:
+            self.logger.experiment["tokens"].log(f"{self.current_epoch}, {tokens}")
+
 
         for error in errors:
             self.logger.experiment["error"].log(f"{self.current_epoch}, {error}")
@@ -139,6 +130,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
     def sample(self, num_samples, max_len, verbose=False):
         offset = 0
         maybe_smiles_list = []
+        tokens_list = []
         errors = []
         while offset < num_samples: 
             cur_num_samples = min(num_samples - offset, self.hparams.sample_batch_size)
@@ -148,24 +140,27 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
             for data in data_list:
                 if data.error is None:
-                    try:
-                        smiles = data.to_smiles()
+                    smiles, error = data.to_smiles()
+                    if error is None:
                         maybe_smiles_list.append(smiles)
-                    except Exception as e:
-                        errors.append(e)
+                    else:
+                        errors.append(data.error)
+
                 else:
                     errors.append(data.error)
+
+            tokens_list += ["".join(data.tokens) for data in data_list]
 
             if verbose:
                 print(f"{len(maybe_smiles_list)} / {num_samples}")
         
-        return maybe_smiles_list, errors
+        return maybe_smiles_list, tokens_list, errors
 
     @staticmethod
     def add_args(parser):
         parser.add_argument("--dataset_name", type=str, default="zinc")
 
-        parser.add_argument("--num_layers", type=int, default=6)
+        parser.add_argument("--num_layers", type=int, default=3)
         parser.add_argument("--emb_size", type=int, default=1024)
         parser.add_argument("--nhead", type=int, default=8)
         parser.add_argument("--dim_feedforward", type=int, default=2048)
@@ -180,6 +175,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--num_samples", type=int, default=256)
         parser.add_argument("--sample_batch_size", type=int, default=256)
         parser.add_argument("--test_num_samples", type=int, default=30000)
+        parser.add_argument("--disable_loc", action="store_true")
         
         return parser
 

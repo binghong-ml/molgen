@@ -5,7 +5,7 @@ import math
 
 from tqdm import tqdm
 
-from data.util import RING_TOKENS, VALUE_TOKENS, Data, get_value_id
+from data.util import PAD_TOKEN, RING_TOKENS, TOKENS, Data, get_id
 # helper Module to convert tensor of input indices into corresponding tensor of token embeddings
 class TokenEmbedding(nn.Module):
     def __init__(self, vocab_size, emb_size):
@@ -39,22 +39,25 @@ class BaseGenerator(nn.Module):
         nhead,
         dim_feedforward,
         dropout,
+        disable_loc,
     ):
         super(BaseGenerator, self).__init__()
         self.nhead = nhead
 
         #
         self.position_embedding_layer = AbsolutePositionalEncoding(emb_size)
-        self.val_embedding_layer = TokenEmbedding(len(VALUE_TOKENS), emb_size)
-        self.ring_embedding_layer = TokenEmbedding(len(RING_TOKENS), emb_size)
+        self.token_embedding_layer = TokenEmbedding(len(TOKENS), emb_size)
         
         #
         self.input_dropout = nn.Dropout(dropout)
 
         #
-        
-        #
         self.distance_embedding_layer = nn.Embedding(200, nhead)
+        
+        self.disable_loc = disable_loc
+        self.up_loc_embedding_layer = nn.Embedding(100, nhead)
+        self.down_loc_embedding_layer = nn.Embedding(100, nhead)
+        self.right_loc_embedding_layer = nn.Embedding(100, nhead)
 
         #
         encoder_layer = nn.TransformerEncoderLayer(emb_size, nhead, dim_feedforward, dropout, "gelu")
@@ -62,26 +65,24 @@ class BaseGenerator(nn.Module):
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers, encoder_norm)
 
         #
-        self.generator = nn.Linear(emb_size, len(VALUE_TOKENS) * len(RING_TOKENS))
+        self.generator = nn.Linear(emb_size, len(TOKENS))
         
 
-    def forward(self, val_sequences, ring_sequences, distance_squares):
-        batch_size = val_sequences.size(0)
-        sequence_len = val_sequences.size(1)
+    def forward(self, batched_data):
+        sequences, distance_squares, up_loc_squares, down_loc_squares, right_loc_squares = batched_data
+        batch_size = sequences.size(0)
+        sequence_len = sequences.size(1)
             
         #
-        #out = self.position_embedding_layer(sequence_len)
-        out = self.val_embedding_layer(val_sequences)
-        out = out + self.ring_embedding_layer(ring_sequences)
+        out = self.token_embedding_layer(sequences)
         out = self.input_dropout(out)
 
         #
         mask = self.distance_embedding_layer(distance_squares)
-        
-        #
-        #distance_squares = torch.abs(torch.arange(sequence_len).unsqueeze(0) - torch.arange(sequence_len).unsqueeze(1))
-        #distance_squares = distance_squares.view(1, sequence_len, sequence_len).repeat(batch_size, 1, 1)
-        #mask += self.distance_embedding_layer(distance_squares.to(out.device))
+        if not self.disable_loc:
+            mask += self.up_loc_embedding_layer(up_loc_squares)
+            mask += self.down_loc_embedding_layer(down_loc_squares)
+            mask += self.right_loc_embedding_layer(right_loc_squares)
         
         mask = mask.permute(0, 3, 1, 2)
         
@@ -92,7 +93,7 @@ class BaseGenerator(nn.Module):
         mask = mask.reshape(-1, sequence_len, sequence_len)
         
         #
-        key_padding_mask = (val_sequences == get_value_id("<pad>"))
+        key_padding_mask = (sequences == get_id(PAD_TOKEN))
 
         out = out.transpose(0, 1)
         out = self.transformer(out, mask, key_padding_mask)
@@ -110,29 +111,15 @@ class BaseGenerator(nn.Module):
             if len(data_list) == 0:
                 break
 
-            #
-            val_sequences, ring_sequences, distance_squares = Data.collate([data.featurize() for data in data_list])
-
-
-            logits = self(val_sequences.to(device), ring_sequences.to(device), distance_squares.to(device))
-
-            next_pred = Categorical(logits=logits[:, -1]).sample()
-            next_val_id = next_pred // len(RING_TOKENS)
-            next_ring_id = next_pred % len(RING_TOKENS)
-
-            for data, val_id, ring_id in zip(data_list, next_val_id.tolist(), next_ring_id.tolist()):
-                try:
-                    data.update(val_id, ring_id)
-                except Exception as e:
-                    data.error = e
-                    data.ended = True
+            batched_data = Data.collate([data.featurize() for data in data_list])
+            batched_data = [tsr.to(device) for tsr in batched_data]
+            logits = self(batched_data)
+            preds = Categorical(logits=logits[:, -1]).sample()
+            for data, id in zip(data_list, preds.tolist()):
+                data.update(id)
                         
             ended_data_list += [data for data in data_list if data.ended]
             data_list = [data for data in data_list if not data.ended]
             
-            if idx == max_len - 1:
-                for data in data_list:
-                    data.timeout()
-
         data_list = data_list + ended_data_list
         return data_list

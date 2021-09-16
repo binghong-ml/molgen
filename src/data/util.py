@@ -1,11 +1,12 @@
 # https://github.com/dakoner/keras-molecules/blob/dbbb790e74e406faa70b13e8be8104d9e938eba2/convert_rdkit_to_networkx.py
 # https://github.com/snap-stanford/pretrain-gnns/blob/80608723ac3aac0f7059ffa0558f082252524493/chem/loader.py#L260
 
+from itertools import combinations
 import random
 import numpy as np
 from scipy import sparse
 import networkx as nx
-from networkx.algorithms.shortest_paths.generic import shortest_path
+from networkx.algorithms.shortest_paths.generic import shortest_path, shortest_path_length
 import torch
 
 from rdkit import Chem
@@ -14,271 +15,354 @@ from copy import copy
 # rdBase.DisableLog('rdApp.error')
 from torch.nn.utils.rnn import pad_sequence
 
-from data.smiles import smiles_to_nx, nx_to_smiles
+from data.smiles import TOKEN2ATOMFEAT, TOKEN2BONDFEAT, molgraph2smiles, smiles2molgraph
 from collections import defaultdict
 
-SPECIAL_TOKENS = ["<pad>", "<bos>", "<eos>"]
-BRANCH_TOKENS = ["<branch_start>", "<branch_next>", "<branch_end>"]
-VALUE_TOKENS = SPECIAL_TOKENS + BRANCH_TOKENS + ATOM_TOKENS + BOND_TOKENS
-RING_TOKENS = SPECIAL_TOKENS + ["<ring_start>"] + [("RING", ring_idx) for ring_idx in range(20)]
+BOS_TOKEN = "[bos]"
+EOS_TOKEN = "[eos]"
+PAD_TOKEN = "[pad]"
+SPECIAL_TOKENS = ["[pad]", "[mask]", "[bos]", "[eos]"]
+ATOM_TOKENS = [token for token in TOKEN2ATOMFEAT]
+BOND_TOKENS = [token for token in TOKEN2BONDFEAT]
+BRANCH_START_TOKEN = "("
+BRANCH_END_TOKEN = ")"
+BRANCH_TOKENS = [BRANCH_START_TOKEN, BRANCH_END_TOKEN]
+RING_TOKENS = [f"[R{idx}]" for idx in range(20)]
+TOKENS = SPECIAL_TOKENS + ATOM_TOKENS + BOND_TOKENS + BRANCH_TOKENS + RING_TOKENS
 
-def get_value_id(token):
-    return VALUE_TOKENS.index(token)
+def get_id(token):
+    return TOKENS.index(token)
 
-def get_value_token(id):
-    return VALUE_TOKENS[id]
+def get_token(id):
+    return TOKENS[id]
 
-def get_ring_id(token):
+def get_ring_token(idx):
+    return f"[R{idx}]"
+
+def get_ring_idx(token):
     return RING_TOKENS.index(token)
 
-def get_ring_token(id):
-    return RING_TOKENS[id]
-
 class Data:
-    def __init__(self, queue_scheme="bfs", max_queue_size=100):
-        self.G = nx.DiGraph()
-        self._node_offset = 0
-        self.pointer_node = -1
-        
-        self.ring_token2nodes = defaultdict(list)
-        self.node2ring_token = dict()
-        self.node2val_token = dict()
+    def __init__(self):
+        self.ids = []
+        self.tokens = []
 
-        self.branch_starts = []
+        self.G = nx.DiGraph()
+        self.position_G = nx.DiGraph()
+
+        self._node_offset = -1
+        self.branch_start_nodes = []
+        self.ring_idx_to_nodes = defaultdict(list)
         
+        self.pointer_node = None
         self.ended = False
         self.error = None
         
+        self.bos_node = None
+        self.eos_node = None
+
+        self.branch_features = []
+        self.update(get_id(BOS_TOKEN))
+
     def __len__(self):
         return len(self.G.nodes())
 
-    def update(self, val_id, ring_id):
-        val_token = get_value_token(val_id)
-        ring_token = get_ring_token(ring_id)
-        if val_token in ATOM_TOKENS:
-            self.add_atom(val_token, ring_token)
-        elif val_token in BOND_TOKENS:
-            self.add_bond(val_token)
-        elif val_token in BRANCH_TOKENS:
-            self.add_branch(val_token)
-        elif val_token == "<eos>":
-            self.ended = True
-        else:
-            self.ended = True
-            self.error = f"{val_token} token added"
-
-    def add_atom(self, val_token, ring_token):
+    def update(self, id):
+        token = get_token(id)
+        self.ids.append(id)
+        self.tokens.append(token)
         new_node = self.create_node()
-        
         self.G.add_node(new_node)
-        if self.pointer_node > -1:
+        self.position_G.add_node(new_node)
+        
+        if token in ATOM_TOKENS + BOND_TOKENS + RING_TOKENS:
+            self.add_regular_token(new_node, token)
+        elif token == BRANCH_START_TOKEN:
+            self.add_branch_start_token(new_node)
+        elif token == BRANCH_END_TOKEN:
+            self.add_branch_end_token(new_node)
+        elif token == BOS_TOKEN:
+            self.add_bos_token(new_node)
+        elif token == EOS_TOKEN:
+            self.add_eos_token(new_node)
+        else: 
+            self.set_error(f"{token} token added.")
+
+        self.save_current_features()
+
+    def add_regular_token(self, new_node, token):
+        if self.pointer_node is not None:
+            if token in (ATOM_TOKENS + RING_TOKENS) and self.tokens[self.pointer_node] in (ATOM_TOKENS + RING_TOKENS):
+                self.set_error("consecutive atom tokens")
+
+            if token in BOND_TOKENS and self.tokens[self.pointer_node] in BOND_TOKENS:
+                self.set_error("consecutive bond tokens")
+
             self.G.add_edge(self.pointer_node, new_node)
 
+            #
+            self.position_G.add_edge(self.pointer_node, new_node, weight=10**6)
+            self.position_G.add_edge(new_node, self.pointer_node, weight=10**3)
+        
         self.pointer_node = new_node
-        
-        self.node2val_token[new_node] = val_token
-        self.node2ring_token[new_node] = ring_token
-        if ring_token != get_ring_token(0):
-            self.ring_token2nodes[ring_token].append(new_node)       
-        
-    def add_bond(self, val_token):
-        if self.pointer_node == -1:
-            self.ended = True
-            self.error = "bond added when pointer is negative"
+
+        if token in RING_TOKENS:
+            ring_idx = get_ring_idx(token)
+            if len(self.ring_idx_to_nodes[ring_idx]) == 2:
+                self.set_error("more than 2 nodes with same ring_idx")
+
+            self.ring_idx_to_nodes[ring_idx].append(new_node)
+
+    def add_branch_start_token(self, new_node):
+        if self.pointer_node is None:
+            self.set_error("( added at start.")
+            return 
+
+        if self.tokens[self.pointer_node] not in ([BRANCH_START_TOKEN] + ATOM_TOKENS):
+            self.set_error("( after non-{atom, )}")
             return
         
-        new_node = self.create_node()
-        self.G.add_node(new_node)
+        #
         self.G.add_edge(self.pointer_node, new_node)
+
+        #        
+        self.position_G.add_edge(self.pointer_node, new_node, weight=10**6)
+        self.position_G.add_edge(new_node, self.pointer_node, weight=10**3)
+
+        prev_branch_start_nodes = [node for node in self.G.predecessors(self.pointer_node) if node != new_node]
+        if len(prev_branch_start_nodes) > 0:
+            prev_branch_start_node = max(prev_branch_start_nodes)
+            self.position_G.add_edge(prev_branch_start_node, new_node, weight=1)
+            
+        self.branch_start_nodes.append(new_node)
         self.pointer_node = new_node
         
-        self.node2val_token[new_node] = val_token
-    
-    def add_branch(self, val_token):
-        if self.pointer_node == -1:
-            self.ended = True
-            self.error = "branch added when pointer is negative"
+    def add_branch_end_token(self, new_node):
+        if self.pointer_node is None:
+            self.set_error(") added at start.")
             return
 
-        new_node = self.create_node()
-        
-        self.G.add_node(new_node)
-        self.G.add_edge(self.pointer_node, new_node)
-        if val_token == "<branch_start>":
-            self.pointer_node = new_node
-            self.branch_starts.append(new_node)
-        elif val_token == "<branch_next>":
-            self.pointer_node = self.branch_starts[-1]
-        elif val_token == "<branch_end>":
-            self.branch_starts.pop()
-            self.pointer_node = self.branch_starts[-1] if len(self.branch_starts) > 0 else -1
+        if len(self.branch_start_nodes) == 0:
+            self.set_error(") at depth 0.")
+            return
+            
+        if self.tokens[self.pointer_node] not in (ATOM_TOKENS + RING_TOKENS):
+            self.set_error(") after non-atom")
+            return
 
-        self.node2val_token[new_node] = val_token
+        #
+        self.G.add_edge(self.pointer_node, new_node)
+
+        #
+        self.position_G.add_edge(self.pointer_node, new_node, weight=10**6)
+        self.position_G.add_edge(new_node, self.pointer_node, weight=10**3)
+
+        branch_start_node = self.branch_start_nodes.pop()
+        self.pointer_node = next(self.G.predecessors(branch_start_node))
+
+    def add_bos_token(self, new_node):
+        if self.pointer_node is not None:
+            self.set_error("[bos] added at non-start.")
+            return
+
+        self.bos_node = new_node
+
+    def add_eos_token(self, new_node):
+        if self.pointer_node is None:
+            self.set_error("[eos] added at start.")
+            return 
+
+        if len(self.branch_start_nodes) > 0:
+            self.set_error("[eos] added before all branch closed.")
+            return
+        
+        for ring_idx in self.ring_idx_to_nodes:
+            if len(self.ring_idx_to_nodes[ring_idx]) < 2:
+                self.set_error("[eos] added before all ring closed.")
+                return
+
+        if self.tokens[self.pointer_node] not in (ATOM_TOKENS + RING_TOKENS):
+            self.set_error("ended with non-atom token")
+            return
+        
+        self.ended = True
+        self.pointer_node = None
+        self.eos_node = new_node
+
+    def save_current_features(self):
+        num_nodes = self.G.number_of_nodes()
+        branch_feature = torch.zeros(num_nodes, dtype=torch.long) 
+        branch_feature[self.branch_start_nodes] = torch.arange(len(self.branch_start_nodes), 0, -1)
+        self.branch_features.append(branch_feature)
+
+    def set_error(self, msg):
+        self.ended = True
+        self.error = "".join(self.tokens) + " " + msg
 
     def create_node(self):
         self._node_offset += 1
         return copy(self._node_offset)
         
     def to_smiles(self):
-        mol_lineG = self.G.copy()
-        for node in list(mol_lineG.nodes()):
-            if self.node2val_token[node] in ["<branch_start>", "<branch_next>", "<branch_end>"]:
-                predecessor_nodes = list(mol_lineG.predecessors(node))
-                succesor_nodes = list(mol_lineG.successors(node))
-                
-                predecessor_node = predecessor_nodes[0]
-                for succesor_node in succesor_nodes:
-                    mol_lineG.remove_edge(node, succesor_node)
-                    mol_lineG.add_edge(predecessor_node, succesor_node)
-                
-                mol_lineG.remove_node(node)
-        
-        
-        mol_lineG = mol_lineG.to_undirected()
-        for ring_nodes in self.ring_token2nodes.values():
-            first_node, rest_nodes = ring_nodes[0], ring_nodes[1:]
-            for rest_node in rest_nodes:
-                neighbor_nodes = list(mol_lineG.neighbors(rest_node))
-                mol_lineG.remove_edges_from([(node, rest_node) for node in neighbor_nodes])
-                mol_lineG.remove_edges_from([(rest_node, node) for node in neighbor_nodes])
-                mol_lineG.add_edges_from([(node, first_node) for node in neighbor_nodes])
-                mol_lineG.remove_node(rest_node)
-                        
-        mol_G = nx.Graph()
-        for node in mol_lineG:
-            val_token = self.node2val_token[node]
-            if val_token in ATOM_TOKENS:
-                mol_G.add_node(node, token=val_token)
-        
-        for node in mol_lineG:
-            val_token = self.node2val_token[node]
-            if val_token in BOND_TOKENS:
-                node0, node1 = list(mol_lineG.neighbors(node))
-                mol_G.add_edge(node0, node1, token=val_token)
+        mollinegraph = self.G.copy()
+        if self.bos_node is None:
+            return "", "[bos] not added."
 
-        smiles = nx_to_smiles(mol_G)
-        return smiles
+        mollinegraph.remove_node(self.bos_node)
+
+        if self.eos_node is None:
+            return "", "[eos] not added."
+
+        mollinegraph.remove_node(self.eos_node)
+
+        for node in list(mollinegraph.nodes()):
+            if self.tokens[node] in [BRANCH_START_TOKEN, BRANCH_END_TOKEN]:
+                predecessor_node = next(mollinegraph.predecessors(node))
+                succesor_nodes = list(mollinegraph.successors(node))                
+                for succesor_node in succesor_nodes:
+                    mollinegraph.remove_edge(node, succesor_node)
+                    mollinegraph.add_edge(predecessor_node, succesor_node)
+                
+                mollinegraph.remove_node(node)
+        
+        molgraph = nx.Graph()
+        for node in mollinegraph:
+            token = self.tokens[node]
+            if token in ATOM_TOKENS + RING_TOKENS:
+                molgraph.add_node(node, token=token)
+        
+        for node in mollinegraph:
+            token = self.tokens[node]
+            if token in BOND_TOKENS:
+                node0, node1 = next(mollinegraph.successors(node)), next(mollinegraph.predecessors(node))
+                molgraph.add_edge(node0, node1, token=token)
+
+        
+        for dangling_atom_node0, dangling_atom_node1 in self.ring_idx_to_nodes.values():
+            dangling_bond_node0 = next(mollinegraph.predecessors(dangling_atom_node0))
+            atom_node0 = next(mollinegraph.predecessors(dangling_bond_node0))
+
+            dangling_bond_node1 = next(mollinegraph.predecessors(dangling_atom_node1))
+            atom_node1 = next(mollinegraph.predecessors(dangling_bond_node1))
+            
+            molgraph.remove_nodes_from([dangling_atom_node0, dangling_atom_node1])
+            molgraph.add_edge(atom_node0, atom_node1, token=self.tokens[dangling_bond_node0])
+
+        smiles = molgraph2smiles(molgraph)
+
+        return smiles, None
 
     @staticmethod
     def from_smiles(smiles):
-        mol_G = smiles_to_nx(smiles)
-        atom_tokens = nx.get_node_attributes(mol_G, "token")
-        bond_tokens = nx.get_edge_attributes(mol_G, "token")
-        #
-        mol_lineG = nx.Graph()
-        for node in mol_G.nodes():
-            mol_lineG.add_node(node, token=atom_tokens[node])
-        
-        for edge in mol_G.edges():
-            mol_lineG.add_node(edge, token=bond_tokens[edge])
-            
-            node0, node1 = edge
-            mol_lineG.add_edge(node0, edge)
-            mol_lineG.add_edge(node1, edge)
-       
-        spanning_tree = nx.minimum_spanning_tree(mol_lineG).edges()
-        excluded_edges = [edge for edge in mol_lineG.edges() if edge not in spanning_tree]
-        
-        #
-        node2ring, ring_cnt = dict(), 0
-        for edge in excluded_edges:
-            atom_node, bond_node = edge
-            
-            mol_lineG.remove_edge(atom_node, bond_node)
-            new_atom_node = mol_lineG.number_of_nodes()
-            mol_lineG.add_node(new_atom_node, token=atom_tokens[atom_node])
-            mol_lineG.add_edge(new_atom_node, bond_node)
+        molgraph = smiles2molgraph(smiles)
+        atom_tokens = nx.get_node_attributes(molgraph, "token")
+        bond_tokens = nx.get_edge_attributes(molgraph, "token")
+        bond_tokens.update({(node1, node0): val for (node0, node1), val in bond_tokens.items()})
 
-            if atom_node in node2ring:
-                node2ring[new_atom_node] = node2ring[atom_node]
-            else:
-                ring_cnt += 1
-                node2ring[atom_node] = ring_cnt
-                node2ring[new_atom_node] = ring_cnt
-
-        #        
         def keyfunc(idx):
-            return (mol_G.degree(idx), mol_G.nodes[idx].get('token')[0] == 6, idx)
+            return (molgraph.degree(idx), molgraph.nodes[idx].get('token')[0] == 6, idx)
 
-        tokens = nx.get_node_attributes(mol_lineG, "token")
-        start = min(mol_G.nodes, key=keyfunc)
-        dfs_successors = nx.dfs_successors(mol_lineG, source=start)
+        tokens = nx.get_node_attributes(molgraph, "token")
+        start = min(molgraph.nodes, key=keyfunc)
+        
+        dfs_successors = dict(nx.dfs_successors(molgraph, source=start))
 
-        def get_branch_start_id():
-            return [get_value_id("<branch_start>"), 0]
+        edges = set()
+        for n_idx, n_jdxs in dfs_successors.items():
+            for n_jdx in n_jdxs:
+                edges.add((n_idx, n_jdx))
         
-        def get_branch_next_id():
-            return [get_value_id("<branch_next>"), 0]
-        
-        def get_branch_end_id():
-            return [get_value_id("<branch_end>"), 0]
-        
-        def get_sequence(node):
-            val_id = get_value_id(tokens[node])
-            ring_id = node2ring.get(node, 0) + 4
+        ring_edges = [edge for edge in molgraph.edges if tuple(edge) not in edges]
 
-            seq = [[val_id, ring_id]]
-            num_successors = len(dfs_successors.get(node, []))
-            if num_successors == 1:
-                next_node = dfs_successors[node][0]
-                succ_seq = get_sequence(next_node)
-                seq = seq + succ_seq
+        ring_nodes = list(range(molgraph.number_of_nodes(), molgraph.number_of_nodes() + len(ring_edges)))
+        for idx, (ring_node, edge) in enumerate(zip(ring_nodes, ring_edges)):
+            node0, node1 = edge
+
+            atom_tokens[ring_node] = get_ring_token(idx)
+            bond_tokens[node0, ring_node] = bond_tokens[node0, node1]
+            bond_tokens[node1, ring_node] = bond_tokens[node0, node1]
+
+            dfs_successors[node0] = [ring_node] + dfs_successors.get(node0, [])
+            dfs_successors[node1] = [ring_node] + dfs_successors.get(node1, [])
+
+        dfs_predecessors = dict()
+        for node0 in dfs_successors:
+            for node1 in dfs_successors[node0]:
+                dfs_predecessors[node1] = node0
+
+        tokens = []
+        to_visit = [start]
+        while to_visit:
+            current = to_visit.pop()
+            if current in [BRANCH_START_TOKEN, BRANCH_END_TOKEN]:
+                tokens.append(current)
+            else:
+                if current in dfs_predecessors:
+                    tokens.append(bond_tokens[dfs_predecessors[current], current])
             
-            elif num_successors > 1:
-                seq.append(get_branch_start_id())
-                for next_node in dfs_successors[node]:
-                    seq += get_sequence(next_node)
-                    seq.append(get_branch_next_id())
-                
-                seq.pop()
-                seq.append(get_branch_end_id())
+                tokens.append(atom_tokens[current])
             
-            return seq
-
-        sequence = get_sequence(start)
+            next_nodes = dfs_successors.get(current, [])
+            if len(next_nodes) == 1:
+                to_visit.append(next_nodes[0])
+            elif len(next_nodes) > 1:
+                for next_node in reversed(next_nodes):
+                    to_visit.append(BRANCH_END_TOKEN)
+                    to_visit.append(next_node)
+                    to_visit.append(BRANCH_START_TOKEN)          
 
         data = Data()
-        for val_id, ring_id in sequence:
-            data.update(val_id, ring_id)
+        for token in tokens:
+            data.update(get_id(token))
+            if data.error is not None:
+                print(data.error)
+                assert False
         
+        data.update(get_id(EOS_TOKEN))
         return data
 
     def featurize(self):
-        nodes = [node for node in self.G]
-        val_ids = (
-            [get_value_id("<bos>")] 
-            + [get_value_id(self.node2val_token[node]) for node in nodes] 
-            + [get_value_id("<eos>")]
-        )
+        sequence = torch.LongTensor(self.ids)
+        num_nodes = self.G.number_of_nodes()
+        distance_square = torch.abs(torch.arange(num_nodes).unsqueeze(0) - torch.arange(num_nodes).unsqueeze(1)) + 1
+        
+        #
+        shortest_path_lengths = dict(shortest_path_length(self.position_G, weight='weight'))
+        up_loc_square = np.full((num_nodes, num_nodes), -1, dtype=int)
+        down_loc_square = np.full((num_nodes, num_nodes), -1, dtype=int)
+        right_loc_square = np.full((num_nodes, num_nodes), -1, dtype=int)
 
-        ring_ids = []
-        for node in nodes:
-            if node in self.node2ring_token:
-                ring_ids.append(get_ring_id(self.node2ring_token[node]))
-            else:
-                ring_ids.append(get_ring_id(("RING", 0)))
-            
-        ring_ids = [get_ring_id("<bos>")] + ring_ids + [get_ring_id("<eos>")]
+        for i in range(num_nodes):
+            for j in range(num_nodes):
+                path_len = shortest_path_lengths[i].get(j, None)
+                if path_len is None:
+                    continue
+                
+                up_loc_square[i, j], path_len = divmod(path_len, 10**6)
+                down_loc_square[i, j], path_len = divmod(path_len, 10**3)
+                right_loc_square[i, j] = path_len
 
-        distance_squares = torch.abs(
-            torch.arange(len(nodes) + 2).unsqueeze(0) - torch.arange(len(nodes) + 2).unsqueeze(1)
-            ) 
-        distance_squares += 1
-        distance_squares[0] = 0
-        distance_squares[-1] = 0
-        distance_squares[:, 0] = 0
-        distance_squares[:, -1] = 0
+        up_loc_square += 2
+        down_loc_square += 2
+        right_loc_square += 2
 
-        return torch.LongTensor(val_ids), torch.LongTensor(ring_ids), distance_squares
+        up_loc_square = torch.LongTensor(up_loc_square)
+        down_loc_square = torch.LongTensor(down_loc_square)
+        right_loc_square = torch.LongTensor(right_loc_square)
+
+        return sequence, distance_square, up_loc_square, down_loc_square, right_loc_square
+        
 
     @staticmethod
     def collate(data_list):
-        val_sequences, ring_sequences, distance_squares = zip(*data_list)
-        val_sequences = pad_sequence(val_sequences, batch_first=True, padding_value=get_value_id("<pad>"))
-        ring_sequences = pad_sequence(ring_sequences, batch_first=True, padding_value=get_ring_id("<pad>"))
+        sequences, distance_squares, up_loc_squares, down_loc_squares, right_loc_squares = zip(*data_list)
+        sequences = pad_sequence(sequences, batch_first=True, padding_value=get_id(PAD_TOKEN))
         distance_squares = pad_square(distance_squares, padding_value=0)
+        up_loc_squares = pad_square(up_loc_squares, padding_value=0)
+        down_loc_squares = pad_square(down_loc_squares, padding_value=0)
+        right_loc_squares = pad_square(right_loc_squares, padding_value=0)
 
-        return val_sequences, ring_sequences, distance_squares
+        return sequences, distance_squares, up_loc_squares, down_loc_squares, right_loc_squares
 
 def pad_square(squares, padding_value=0):
     max_dim = max([square.size(0) for square in squares])
