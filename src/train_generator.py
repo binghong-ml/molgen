@@ -140,11 +140,14 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
             for data in data_list:
                 if data.error is None:
-                    smiles, error = data.to_smiles()
-                    if error is None:
-                        maybe_smiles_list.append(smiles)
-                    else:
-                        errors.append(data.error)
+                    try:
+                        smiles, error = data.to_smiles()
+                        if error is None:
+                            maybe_smiles_list.append(smiles)
+                        else:
+                            errors.append(data.error)
+                    except Exception as e:
+                        errors.append(e)
 
                 else:
                     errors.append(data.error)
