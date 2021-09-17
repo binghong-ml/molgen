@@ -28,7 +28,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
     def setup_datasets(self, hparams):
         dataset_cls = {"zinc": ZincDataset, "moses": MosesDataset, "polymer": PolymerDataset}.get(hparams.dataset_name)
-        self.train_dataset = dataset_cls("valid")
+        self.train_dataset = dataset_cls("train")
         self.val_dataset = dataset_cls("valid")
         self.test_dataset = dataset_cls("test")
         self.train_smiles_set = set(self.train_dataset.smiles_list)
@@ -41,6 +41,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             dim_feedforward=hparams.dim_feedforward,
             dropout=hparams.dropout,
             disable_loc=hparams.disable_loc,
+            disable_edgelogit = hparams.disable_edgelogit,
        )
 
     ### Dataloaders and optimizers
@@ -180,6 +181,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--sample_batch_size", type=int, default=256)
         parser.add_argument("--test_num_samples", type=int, default=30000)
         parser.add_argument("--disable_loc", action="store_true")
+        parser.add_argument("--disable_edgelogit", action="store_true")
         
         return parser
 

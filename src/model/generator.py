@@ -7,7 +7,7 @@ import math
 from tqdm import tqdm
 from joblib import Parallel, delayed
 
-from data.util import PAD_TOKEN, TOKENS, Data, get_id
+from data.util import PAD_TOKEN, TOKENS, RING_ID_START, RING_ID_END, Data, get_id
 # helper Module to convert tensor of input indices into corresponding tensor of token embeddings
 class TokenEmbedding(nn.Module):
     def __init__(self, vocab_size, emb_size):
@@ -18,6 +18,32 @@ class TokenEmbedding(nn.Module):
     def forward(self, tokens):
         return self.embedding(tokens.long()) * math.sqrt(self.emb_size)
 
+
+class EdgeLogitLayer(nn.Module):
+    def __init__(self, emb_size, hidden_dim):
+        super(EdgeLogitLayer, self).__init__()
+        self.hidden_dim = hidden_dim
+        self.scale = hidden_dim ** -0.5
+        self.linear0 = nn.Linear(emb_size, self.hidden_dim)
+        self.linear1 = nn.Linear(emb_size, self.hidden_dim)
+
+    def forward(self, x, sequences):
+        batch_size = x.size(0)
+        seq_len = x.size(1)
+        out0 = self.linear0(x).view(batch_size, seq_len, self.hidden_dim)
+        
+        out1_ = self.linear1(x).view(batch_size, seq_len, self.hidden_dim)
+        
+        index_ = sequences.masked_fill((sequences < RING_ID_START) | (sequences > RING_ID_END - 1), RING_ID_START-1)
+        index_ = index_ - RING_ID_START + 1
+
+        out1 = torch.zeros(batch_size, RING_ID_END - RING_ID_START + 1, self.hidden_dim).to(out1_.device)
+        out1.scatter_(dim=1, index=index_.unsqueeze(-1).repeat(1, 1, self.hidden_dim), src=out1_)
+        out1 = out1[:, 1:]
+        out1 = out1.permute(0, 2, 1)
+        logits = self.scale * torch.bmm(out0, out1)
+        return logits
+
 class BaseGenerator(nn.Module):
     def __init__(
         self,
@@ -27,6 +53,7 @@ class BaseGenerator(nn.Module):
         dim_feedforward,
         dropout,
         disable_loc,
+        disable_edgelogit,
     ):
         super(BaseGenerator, self).__init__()
         self.nhead = nhead
@@ -53,8 +80,13 @@ class BaseGenerator(nn.Module):
         #
 
         #
-        self.generator = nn.Linear(emb_size, len(TOKENS))
-
+        self.disable_edgelogit = disable_edgelogit
+        if self.disable_edgelogit:
+            self.generator = nn.Linear(emb_size, len(TOKENS))
+        else:
+            self.generator = nn.Linear(emb_size, len(TOKENS) - (RING_ID_END - RING_ID_START))
+        self.ring_generator = EdgeLogitLayer(emb_size=emb_size, hidden_dim=emb_size)
+        
         #
         
 
@@ -90,7 +122,13 @@ class BaseGenerator(nn.Module):
         out = out.transpose(0, 1)
 
         #
-        logits = self.generator(out)        
+        if self.disable_edgelogit:
+            logits = self.generator(out)        
+        else:
+            logits0 = self.generator(out)
+            logits1 = self.ring_generator(out, sequences)
+            logits = torch.cat([logits0, logits1], dim=2)
+        
         logits = logits.masked_fill(pred_masks, float('-inf'))
 
         return logits

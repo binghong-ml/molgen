@@ -37,6 +37,10 @@ IDX2RING_END_TOKEN = {idx: token for token, idx in enumerate(RING_END_TOKENS)}
 
 
 TOKENS = SPECIAL_TOKENS + BRANCH_TOKENS + ATOM_TOKENS + BOND_TOKENS + RING_START_TOKENS + RING_END_TOKENS
+
+RING_ID_START = len(SPECIAL_TOKENS + BRANCH_TOKENS + ATOM_TOKENS + BOND_TOKENS)
+RING_ID_END = RING_ID_START + len(RING_START_TOKENS)
+
 TOKEN2ID = {token: idx for idx, token in enumerate(TOKENS)}
 ID2TOKEN = {idx: token for idx, token in enumerate(TOKENS)}
 
