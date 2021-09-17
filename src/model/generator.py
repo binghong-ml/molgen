@@ -51,7 +51,11 @@ class BaseGenerator(nn.Module):
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers, encoder_norm)
 
         #
+
+        #
         self.generator = nn.Linear(emb_size, len(TOKENS))
+
+        #
         
 
     def forward(self, batched_data):
