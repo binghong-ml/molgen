@@ -134,6 +134,8 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         while offset < num_samples: 
             cur_num_samples = min(num_samples - offset, self.hparams.sample_batch_size)
             offset += cur_num_samples
+
+            self.model.eval()
             with torch.no_grad():
                 data_list = self.model.decode(cur_num_samples, max_len=max_len, device=self.device)
 
@@ -185,6 +187,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     BaseGeneratorLightningModule.add_args(parser)
     parser.add_argument("--max_epochs", type=int, default=100)
+    parser.add_argument("--check_val_every_n_epoch", type=int, default=5)
     parser.add_argument("--gradient_clip_val", type=float, default=0.5)
     parser.add_argument("--load_checkpoint_path", type=str, default="")
     parser.add_argument("--tag", type=str, default="default")
@@ -205,6 +208,7 @@ if __name__ == "__main__":
         default_root_dir="../resource/log/",
         max_epochs=hparams.max_epochs,
         #callbacks=[checkpoint_callback],
+        check_val_every_n_epoch=hparams.check_val_every_n_epoch, 
         gradient_clip_val=hparams.gradient_clip_val,
     )
     trainer.fit(model)
