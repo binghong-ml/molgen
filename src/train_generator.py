@@ -28,7 +28,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
     def setup_datasets(self, hparams):
         dataset_cls = {"zinc": ZincDataset, "moses": MosesDataset, "polymer": PolymerDataset}.get(hparams.dataset_name)
-        self.train_dataset = dataset_cls("train")
+        self.train_dataset = dataset_cls("valid")
         self.val_dataset = dataset_cls("valid")
         self.test_dataset = dataset_cls("test")
         self.train_smiles_set = set(self.train_dataset.smiles_list)
@@ -101,7 +101,6 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         for tokens in tokens_list:
             self.logger.experiment["tokens"].log(f"{self.current_epoch}, {tokens}")
 
-
         for error in errors:
             self.logger.experiment["error"].log(f"{self.current_epoch}, {error}")
 
@@ -163,7 +162,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
     def add_args(parser):
         parser.add_argument("--dataset_name", type=str, default="zinc")
 
-        parser.add_argument("--num_layers", type=int, default=6)
+        parser.add_argument("--num_layers", type=int, default=3)
         parser.add_argument("--emb_size", type=int, default=1024)
         parser.add_argument("--nhead", type=int, default=8)
         parser.add_argument("--dim_feedforward", type=int, default=2048)
@@ -171,7 +170,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--logit_hidden_dim", type=int, default=256)
 
         parser.add_argument("--lr", type=float, default=1e-4)
-        parser.add_argument("--batch_size", type=int, default=128)
+        parser.add_argument("--batch_size", type=int, default=256)
         parser.add_argument("--num_workers", type=int, default=8)
 
         parser.add_argument("--max_len", type=int, default=250)

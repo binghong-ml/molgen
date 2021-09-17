@@ -21,18 +21,31 @@ from collections import defaultdict
 BOS_TOKEN = "[bos]"
 EOS_TOKEN = "[eos]"
 PAD_TOKEN = "[pad]"
+MASK_TOKEN = "[mask]"
 SPECIAL_TOKENS = ["[pad]", "[mask]", "[bos]", "[eos]"]
 ATOM_TOKENS = [token for token in TOKEN2ATOMFEAT]
 BOND_TOKENS = [token for token in TOKEN2BONDFEAT]
 BRANCH_START_TOKEN = "("
 BRANCH_END_TOKEN = ")"
 BRANCH_TOKENS = [BRANCH_START_TOKEN, BRANCH_END_TOKEN]
-RING_START_TOKENS = [f"[bor{idx}]" for idx in range(20)]
-RING_END_TOKENS = [f"[eor{idx}]" for idx in range(20)]
-TOKENS = SPECIAL_TOKENS + ATOM_TOKENS + BOND_TOKENS + BRANCH_TOKENS + RING_START_TOKENS + RING_END_TOKENS
+
+POSSIBLE_RING_IDXS = 20
+RING_START_TOKENS = [f"[bor{idx}]" for idx in range(POSSIBLE_RING_IDXS)]
+IDX2RING_START_TOKEN = {idx: token for token, idx in enumerate(RING_START_TOKENS)}
+RING_END_TOKENS = [f"[eor{idx}]" for idx in range(POSSIBLE_RING_IDXS)]
+IDX2RING_END_TOKEN = {idx: token for token, idx in enumerate(RING_END_TOKENS)}
+
+
+TOKENS = SPECIAL_TOKENS + BRANCH_TOKENS + ATOM_TOKENS + BOND_TOKENS + RING_START_TOKENS + RING_END_TOKENS
+TOKEN2ID = {token: idx for idx, token in enumerate(TOKENS)}
+ID2TOKEN = {idx: token for idx, token in enumerate(TOKENS)}
+
 
 def get_id(token):
-    return TOKENS.index(token)
+    return TOKEN2ID[token]
+
+def get_ids(tokens):
+    return [TOKEN2ID[token] for token in tokens]
 
 def get_token(id):
     return TOKENS[id]
@@ -44,7 +57,7 @@ def get_ring_end_token(idx):
     return f"[eor{idx}]"
 
 def get_ring_idx(token):
-    ring_idx = RING_START_TOKENS.index(token) if token in RING_START_TOKENS else RING_END_TOKENS.index(token)
+    ring_idx = IDX2RING_START_TOKEN[token] if token in RING_START_TOKENS else IDX2RING_END_TOKEN[token]
     return ring_idx
 
 class Data:
@@ -66,7 +79,8 @@ class Data:
         self.bos_node = None
         self.eos_node = None
 
-        self.branch_features = []
+        self.masks = []
+
         self.update(get_id(BOS_TOKEN))
 
     def __len__(self):
@@ -213,11 +227,60 @@ class Data:
         self.eos_node = new_node
 
     def save_current_features(self):
-        num_nodes = self.G.number_of_nodes()
-        branch_feature = torch.zeros(num_nodes, dtype=torch.long) 
-        branch_feature[self.branch_start_nodes] = torch.arange(len(self.branch_start_nodes), 0, -1)
-        self.branch_features.append(branch_feature)
+        # prepare mask feature
+        forbidden_tokens = [BOS_TOKEN, MASK_TOKEN, PAD_TOKEN]
+        if self.pointer_node is None:
+            forbidden_tokens += (
+                [EOS_TOKEN] 
+                + RING_START_TOKENS 
+                + RING_END_TOKENS 
+                + [BRANCH_START_TOKEN, BRANCH_END_TOKEN] 
+                + BOND_TOKENS
+                )
+        elif self.tokens[self.pointer_node] in (ATOM_TOKENS + RING_START_TOKENS + RING_END_TOKENS):
+            forbidden_tokens += (ATOM_TOKENS + RING_START_TOKENS + RING_END_TOKENS)
+        
+        elif self.tokens[self.pointer_node] in BOND_TOKENS:
+            forbidden_tokens += ([EOS_TOKEN] + BOND_TOKENS + [BRANCH_START_TOKEN, BRANCH_END_TOKEN])
+        
+        elif self.tokens[self.pointer_node] == BRANCH_START_TOKEN:
+            forbidden_tokens += ATOM_TOKENS + [BRANCH_START_TOKEN]
+        
+        elif self.tokens[self.pointer_node] == BRANCH_END_TOKEN:
+            forbidden_tokens += ATOM_TOKENS + RING_START_TOKENS + RING_END_TOKENS
+        
+        if len(self.branch_start_nodes) == 0:
+            forbidden_tokens.append(BRANCH_END_TOKEN)
+        else:
+            forbidden_tokens.append(EOS_TOKEN)
+        
+        
+        exists_open_ring = False
+        for possible_ring_idx in range(POSSIBLE_RING_IDXS):
+            num_idxs = len(self.ring_idx_to_nodes.get(possible_ring_idx, []))
+            if num_idxs == 0:
+                forbidden_tokens.append(get_ring_end_token(possible_ring_idx))
+            
+            elif num_idxs == 1:
+                forbidden_tokens.append(get_ring_start_token(possible_ring_idx))
+                exists_open_ring = True
 
+            elif num_idxs == 2:
+                forbidden_tokens.append(get_ring_start_token(possible_ring_idx))
+                forbidden_tokens.append(get_ring_end_token(possible_ring_idx))
+        
+        if exists_open_ring:
+            forbidden_tokens.append(EOS_TOKEN)
+        
+        forbidden_ids = get_ids(list(set(forbidden_tokens)))
+        mask = np.zeros(len(TOKENS), dtype=bool)
+        mask[forbidden_ids] = True
+
+        if mask.sum() < 2:
+            assert False
+
+        self.masks.append(mask)
+        
     def set_error(self, msg):
         self.ended = True
         self.error = "".join(self.tokens) + " " + msg
@@ -225,7 +288,7 @@ class Data:
     def create_node(self):
         self._node_offset += 1
         return copy(self._node_offset)
-        
+    
     def to_smiles(self):
         mollinegraph = self.G.copy()
         if self.bos_node is None:
@@ -297,6 +360,8 @@ class Data:
             dfs_traj.append(current)
             to_visit += dfs_successors.get(current, [])
 
+        node2dfsidx = {node: idx for idx, node in enumerate(dfs_traj)}
+
         edges = set()
         for n_idx, n_jdxs in dfs_successors.items():
             for n_jdx in n_jdxs:
@@ -307,7 +372,7 @@ class Data:
         node_offset = molgraph.number_of_nodes()
         for idx, edge in enumerate(ring_edges):
             node0, node1 = edge
-            node0, node1 = sorted([node0, node1], key=dfs_traj.index)
+            node0, node1 = sorted([node0, node1], key=node2dfsidx.get)
             ring_node0, ring_node1 = node_offset, node_offset+1
             node_offset += 2
 
@@ -347,11 +412,16 @@ class Data:
 
         data = Data()
         for token in tokens:
+            prev_mask = data.masks[-1]
+            if prev_mask[get_id(token)] is True:
+                print(data.tokens)
+                assert False
+
             data.update(get_id(token))
             if data.error is not None:
                 print(data.error)
                 assert False
-        
+
         data.update(get_id(EOS_TOKEN))
         return data
 
@@ -384,19 +454,24 @@ class Data:
         down_loc_square = torch.LongTensor(down_loc_square)
         right_loc_square = torch.LongTensor(right_loc_square)
 
-        return sequence, distance_square, up_loc_square, down_loc_square, right_loc_square
+        masks = torch.tensor(self.masks, dtype=torch.bool)
+
+        return sequence, distance_square, up_loc_square, down_loc_square, right_loc_square, masks
         
 
     @staticmethod
     def collate(data_list):
-        sequences, distance_squares, up_loc_squares, down_loc_squares, right_loc_squares = zip(*data_list)
+        sequences, distance_squares, up_loc_squares, down_loc_squares, right_loc_squares, masks = zip(*data_list)
         sequences = pad_sequence(sequences, batch_first=True, padding_value=get_id(PAD_TOKEN))
+        
         distance_squares = pad_square(distance_squares, padding_value=0)
         up_loc_squares = pad_square(up_loc_squares, padding_value=0)
         down_loc_squares = pad_square(down_loc_squares, padding_value=0)
         right_loc_squares = pad_square(right_loc_squares, padding_value=0)
 
-        return sequences, distance_squares, up_loc_squares, down_loc_squares, right_loc_squares
+        masks = pad_sequence(masks, batch_first=True, padding_value=0)
+
+        return sequences, distance_squares, up_loc_squares, down_loc_squares, right_loc_squares, masks
 
 def pad_square(squares, padding_value=0):
     max_dim = max([square.size(0) for square in squares])

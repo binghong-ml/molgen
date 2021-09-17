@@ -1,9 +1,11 @@
+from joblib.parallel import delayed
 import torch
 import torch.nn as nn
 from torch.distributions import Categorical
 import math
 
 from tqdm import tqdm
+from joblib import Parallel, delayed
 
 from data.util import PAD_TOKEN, TOKENS, Data, get_id
 # helper Module to convert tensor of input indices into corresponding tensor of token embeddings
@@ -15,21 +17,6 @@ class TokenEmbedding(nn.Module):
 
     def forward(self, tokens):
         return self.embedding(tokens.long()) * math.sqrt(self.emb_size)
-
-class AbsolutePositionalEncoding(nn.Module):
-    def __init__(self, emb_size, maxlen=500):
-        super(AbsolutePositionalEncoding, self).__init__()
-        den = torch.exp(-torch.arange(0, emb_size, 2) * math.log(10000) / emb_size)
-        pos = torch.arange(0, maxlen).reshape(maxlen, 1)
-        pos_embedding = torch.zeros((maxlen, emb_size))
-        pos_embedding[:, 0::2] = torch.sin(pos * den)
-        pos_embedding[:, 1::2] = torch.cos(pos * den)
-        pos_embedding = pos_embedding.unsqueeze(-2)
-
-        self.register_buffer("pos_embedding", pos_embedding.transpose(0, 1))
-
-    def forward(self, sequence_length):
-        return self.pos_embedding[:, :sequence_length]
 
 class BaseGenerator(nn.Module):
     def __init__(
@@ -45,19 +32,18 @@ class BaseGenerator(nn.Module):
         self.nhead = nhead
 
         #
-        self.position_embedding_layer = AbsolutePositionalEncoding(emb_size)
         self.token_embedding_layer = TokenEmbedding(len(TOKENS), emb_size)
         
         #
         self.input_dropout = nn.Dropout(dropout)
 
         #
-        self.distance_embedding_layer = nn.Embedding(200, nhead)
+        self.distance_embedding_layer = nn.Embedding(250, nhead)
         
         self.disable_loc = disable_loc
-        self.up_loc_embedding_layer = nn.Embedding(100, nhead)
-        self.down_loc_embedding_layer = nn.Embedding(100, nhead)
-        self.right_loc_embedding_layer = nn.Embedding(100, nhead)
+        self.up_loc_embedding_layer = nn.Embedding(250, nhead)
+        self.down_loc_embedding_layer = nn.Embedding(250, nhead)
+        self.right_loc_embedding_layer = nn.Embedding(250, nhead)
 
         #
         encoder_layer = nn.TransformerEncoderLayer(emb_size, nhead, dim_feedforward, dropout, "gelu")
@@ -69,7 +55,7 @@ class BaseGenerator(nn.Module):
         
 
     def forward(self, batched_data):
-        sequences, distance_squares, up_loc_squares, down_loc_squares, right_loc_squares = batched_data
+        sequences, distance_squares, up_loc_squares, down_loc_squares, right_loc_squares, pred_masks = batched_data
         batch_size = sequences.size(0)
         sequence_len = sequences.size(1)
             
@@ -101,13 +87,22 @@ class BaseGenerator(nn.Module):
 
         #
         logits = self.generator(out)        
+        logits = logits.masked_fill(pred_masks, float('-inf'))
+
         return logits
     
 
     def decode(self, num_samples, max_len, device):
         data_list = [Data() for _ in range(num_samples)]
         ended_data_list = []
-        for idx in range(max_len):
+
+        parallel = Parallel(n_jobs=8)
+        def _update_data(inp):
+            data, id = inp
+            data.update(id)
+            return data
+        
+        for _ in range(max_len):
             if len(data_list) == 0:
                 break
 
@@ -115,8 +110,7 @@ class BaseGenerator(nn.Module):
             batched_data = [tsr.to(device) for tsr in batched_data]
             logits = self(batched_data)
             preds = Categorical(logits=logits[:, -1]).sample()
-            for data, id in zip(data_list, preds.tolist()):
-                data.update(id)
+            data_list = parallel(delayed(_update_data)(pair) for pair in zip(data_list, preds.tolist()))
                         
             ended_data_list += [data for data in data_list if data.ended]
             data_list = [data for data in data_list if not data.ended]
