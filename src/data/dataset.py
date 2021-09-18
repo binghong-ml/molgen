@@ -19,14 +19,13 @@ class ZincDataset(Dataset):
 
     def __getitem__(self, idx):
         smiles = self.smiles_list[idx]
-        return SourceData.from_smiles(smiles).featurize()
+        return TargetData.from_smiles(smiles).featurize()
 
 
 class ZincAutoEncoderDataset(ZincDataset):
     def __getitem__(self, idx):
         smiles = self.smiles_list[idx]
-        sequence = SourceData.from_smiles((smiles))
-        return sequence, sequence
+        return TargetData.from_smiles(smiles), SourceData.from_smiles(smiles)
 
 
 class MosesDataset(ZincDataset):
