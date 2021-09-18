@@ -57,18 +57,17 @@ TOKEN2BONDFEAT = {
     "#": (BondType.TRIPLE, BondDir.NONE),
 }
 BONDFEAT2TOKEN = {val: key for key, val in TOKEN2BONDFEAT.items()}
+
+
 def get_atom_token(atom):
-    feature = (
-        atom.GetAtomicNum(),
-        atom.GetChiralTag(), 
-        atom.GetFormalCharge(), 
-        atom.GetNumExplicitHs()
-    )
+    feature = (atom.GetAtomicNum(), atom.GetChiralTag(), atom.GetFormalCharge(), atom.GetNumExplicitHs())
     return ATOMFEAT2TOKEN[feature]
+
 
 def get_bond_token(bond):
     feature = bond.GetBondType(), bond.GetBondDir()
     return BONDFEAT2TOKEN[feature]
+
 
 def smiles2molgraph(smiles):
     mol = Chem.MolFromSmiles(smiles)
@@ -81,15 +80,16 @@ def smiles2molgraph(smiles):
 
     return G
 
+
 def molgraph2smiles(G):
     node_tokens = nx.get_node_attributes(G, "token")
     edge_tokens = nx.get_edge_attributes(G, "token")
-    
+
     mol = Chem.RWMol()
     node_to_idx = dict()
     for node in G.nodes():
         atomic_num, chiral_tag, formal_charge, num_explicit_Hs = TOKEN2ATOMFEAT[node_tokens[node]]
-        a=Chem.Atom(atomic_num)
+        a = Chem.Atom(atomic_num)
         a.SetChiralTag(chiral_tag)
         a.SetFormalCharge(formal_charge)
         a.SetNumExplicitHs(num_explicit_Hs)

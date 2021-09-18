@@ -15,6 +15,7 @@ from data.dataset import MosesAutoEncoderDataset, ZincAutoEncoderDataset
 from data.data import SourceData, TargetData
 from util import compute_sequence_cross_entropy, compute_sequence_accuracy, canonicalize
 
+
 class BaseTranslatorLightningModule(pl.LightningModule):
     def __init__(self, hparams):
         super(BaseTranslatorLightningModule, self).__init__()
@@ -47,7 +48,7 @@ class BaseTranslatorLightningModule(pl.LightningModule):
             hparams.dim_feedforward,
             hparams.dropout,
             hparams.use_linedistance,
-            )
+        )
 
     ### Dataloaders and optimizers
     def train_dataloader(self):
@@ -87,26 +88,26 @@ class BaseTranslatorLightningModule(pl.LightningModule):
         statistics["loss/total"] = loss
         statistics["acc/element"] = element_acc
         statistics["acc/sequence"] = sequence_acc
-        
+
         return loss, statistics
 
     def training_step(self, batched_data, batch_idx):
         self.sanity_checked = True
-        
+
         loss, statistics = self.shared_step(batched_data, batch_idx)
         for key, val in statistics.items():
             self.log(f"train/{key}", val, on_step=True, logger=True)
 
         return loss
-        
+
     def validation_step(self, batched_data, batch_idx):
-        
+
         loss, statistics = self.shared_step(batched_data, batch_idx)
         for key, val in statistics.items():
             self.log(f"validation/{key}", val, on_step=False, on_epoch=True, logger=True)
 
         return loss
-        
+
     @staticmethod
     def add_args(parser):
         parser.add_argument("--dataset_name", type=str, default="moses")
@@ -122,7 +123,7 @@ class BaseTranslatorLightningModule(pl.LightningModule):
         parser.add_argument("--num_workers", type=int, default=8)
 
         parser.add_argument("--num_repeats", type=int, default=20)
-        
+
         return parser
 
 

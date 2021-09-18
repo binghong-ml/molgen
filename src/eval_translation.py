@@ -6,8 +6,9 @@ import numpy as np
 from props.properties import penalized_logp, drd2, qed, similarity
 
 from rdkit import RDLogger
-#RDLogger.logger().setLevel(RDLogger.CRITICAL)
-RDLogger.DisableLog('rdApp.info')     
+
+# RDLogger.logger().setLevel(RDLogger.CRITICAL)
+RDLogger.DisableLog("rdApp.info")
 from rdkit.rdBase import BlockLogs
 
 from rdkit import Chem
@@ -21,15 +22,15 @@ if __name__ == "__main__":
     if hparams.task == "logp04":
         score_func = lambda src, tgt: penalized_logp(tgt) - penalized_logp(src)
         similarity_thr = 0.4
-    
+
     elif hparams.task == "logp06":
         score_func = lambda src, tgt: penalized_logp(tgt) - penalized_logp(src)
         similarity_thr = 0.6
-    
+
     elif hparams.task == "drd2":
         score_func = lambda src, tgt: float(drd2(tgt) > 0.5)
         similarity_thr = 0.4
-    
+
     elif hparams.task == "qed":
         score_func = lambda src, tgt: float(qed(tgt) > 0.9)
         similarity_thr = 0.4
@@ -64,7 +65,7 @@ if __name__ == "__main__":
         score_list = []
         for smi0, smi1 in combinations(tgt_list, 2):
             try:
-                score_list.append(1- similarity(smi0, smi1))
+                score_list.append(1 - similarity(smi0, smi1))
             except:
                 score_list.append(None)
 
@@ -86,16 +87,15 @@ if __name__ == "__main__":
 
         return score_list
 
-            
     lines = Path(hparams.smiles_list_path).read_text(encoding="utf-8").splitlines()
-    
+
     validity = Parallel(n_jobs=8)(delayed(batch_validity_func)(line) for line in lines)
     validity = np.array(validity, dtype=np.float)
     print(validity.mean())
 
     scores = Parallel(n_jobs=8)(delayed(batch_score_func)(line) for line in lines)
     similarities = Parallel(n_jobs=8)(delayed(batch_similarity_func)(line) for line in lines)
-    
+
     scores = np.array(scores, dtype=np.float)
     similarities = np.array(similarities, dtype=np.float)
 

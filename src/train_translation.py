@@ -17,6 +17,7 @@ from data.dataset import LogP04Dataset, LogP06Dataset, DRD2Dataset, QEDDataset
 from data.data import SourceData, TargetData
 from util import compute_sequence_cross_entropy, compute_sequence_accuracy, canonicalize
 
+
 class BaseTranslatorLightningModule(pl.LightningModule):
     def __init__(self, hparams):
         super(BaseTranslatorLightningModule, self).__init__()
@@ -27,16 +28,13 @@ class BaseTranslatorLightningModule(pl.LightningModule):
         self.sanity_checked = False
 
     def setup_datasets(self, hparams):
-        dataset_cls = {
-            "logp04": LogP04Dataset, 
-            "logp06": LogP06Dataset, 
-            "drd2": DRD2Dataset, 
-            "qed": QEDDataset
-        }.get(self.hparams.dataset_name)
+        dataset_cls = {"logp04": LogP04Dataset, "logp06": LogP06Dataset, "drd2": DRD2Dataset, "qed": QEDDataset}.get(
+            self.hparams.dataset_name
+        )
         self.train_dataset = dataset_cls("train")
         self.val_dataset = dataset_cls("valid")
         self.test_dataset = dataset_cls("test")
-        
+
         self.tokenizer = self.train_dataset.tokenizer
 
         def train_collate(data_list):
@@ -51,7 +49,7 @@ class BaseTranslatorLightningModule(pl.LightningModule):
             src, src_smiles_list = zip(*data_list)
             src = SourceData.collate(src)
             return src, src_smiles_list
-        
+
         self.eval_collate = eval_collate
 
     def setup_model(self, hparams):
@@ -62,7 +60,7 @@ class BaseTranslatorLightningModule(pl.LightningModule):
             hparams.nhead,
             hparams.dim_feedforward,
             hparams.dropout,
-            False
+            False,
         )
 
     ### Dataloaders and optimizers
@@ -118,8 +116,7 @@ class BaseTranslatorLightningModule(pl.LightningModule):
             self.log(f"train/{key}", val, on_step=True, logger=True)
 
         return loss
-    
-    
+
     def validation_step(self, batched_data, batch_idx):
         statistics = dict()
         src, src_smiles_list = batched_data
@@ -127,9 +124,9 @@ class BaseTranslatorLightningModule(pl.LightningModule):
 
         with torch.no_grad():
             tgt_data_list = self.model.decode(src, max_len=max_len, device=self.device)
-            
+
         smiles_list = []
-        for tgt_data, src_smiles in zip(tgt_data_list, src_smiles_list):        
+        for tgt_data, src_smiles in zip(tgt_data_list, src_smiles_list):
             maybe_smiles = tgt_data.get_smiles()
             if canonicalize(maybe_smiles) is None:
                 if self.sanity_checked:
@@ -160,7 +157,7 @@ class BaseTranslatorLightningModule(pl.LightningModule):
                 src_smiles2tgt_smiles_list[src_smiles].append(maybe_smiles)
 
         print(float(invalid) / self.hparams.num_repeats / src[0].size(0))
-        
+
         dict_path = os.path.join(self.hparams.checkpoint_dir, "test_pairs.txt")
         for src_smiles in src_smiles_list:
             with Path(dict_path).open("a") as fp:
@@ -199,7 +196,7 @@ if __name__ == "__main__":
     hparams = parser.parse_args()
 
     model = BaseTranslatorLightningModule(hparams)
-    #if hparams.load_checkpoint_path != "":
+    # if hparams.load_checkpoint_path != "":
     model.load_state_dict(torch.load(hparams.load_checkpoint_path)["state_dict"])
 
     if not hparams.debug:
@@ -213,7 +210,7 @@ if __name__ == "__main__":
     else:
         logger = None
         callbacks = []
-        
+
     trainer = pl.Trainer(
         gpus=1,
         logger=logger,
@@ -226,6 +223,6 @@ if __name__ == "__main__":
 
     if hparams.max_epochs > 0:
         model.load_from_checkpoint(trainer.checkpoint_callback.best_model_path)
-    
+
     model.eval()
     trainer.test(model)
