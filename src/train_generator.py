@@ -41,8 +41,9 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             dim_feedforward=hparams.dim_feedforward,
             dropout=hparams.dropout,
             disable_loc=hparams.disable_loc,
-            disable_edgelogit = hparams.disable_edgelogit,
-       )
+            disable_edgelogit=hparams.disable_edgelogit,
+            disable_branchidx=hparams.disable_branchidx
+        )
 
     ### Dataloaders and optimizers
     def train_dataloader(self):
@@ -72,11 +73,11 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         loss, statistics = 0.0, dict()
 
         # decoding
-        logits = self.model(batched_data)        
+        logits = self.model(batched_data)
         loss = compute_sequence_cross_entropy(logits, batched_data[0], ignore_index=0)
-        statistics["loss/total"] = loss 
+        statistics["loss/total"] = loss
         statistics["acc/total"] = compute_sequence_accuracy(logits, batched_data[0], ignore_index=0)[0]
-        
+
         return loss, statistics
 
     def training_step(self, batched_data, batch_idx):
@@ -95,6 +96,9 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         return loss
 
     def validation_epoch_end(self, outputs):
+        if (self.current_epoch + 1) % self.hparams.check_sample_every_n_epoch != 0:
+            return
+
         num_samples = self.hparams.num_samples if self.sanity_checked else 256
         max_len = self.hparams.max_len if self.sanity_checked else 10
         maybe_smiles_list, tokens_list, errors = self.sample(num_samples, max_len)
@@ -107,7 +111,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
         smiles_list = []
         for maybe_smiles in maybe_smiles_list:
-            self.logger.experiment["maybe_smiles"].log(f"{self.current_epoch}, {maybe_smiles}")            
+            self.logger.experiment["maybe_smiles"].log(f"{self.current_epoch}, {maybe_smiles}")
 
             smiles, error = canonicalize(maybe_smiles)
             if smiles is None:
@@ -132,7 +136,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         maybe_smiles_list = []
         tokens_list = []
         errors = []
-        while offset < num_samples: 
+        while offset < num_samples:
             cur_num_samples = min(num_samples - offset, self.hparams.sample_batch_size)
             offset += cur_num_samples
 
@@ -158,7 +162,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
             if verbose:
                 print(f"{len(maybe_smiles_list)} / {num_samples}")
-        
+
         return maybe_smiles_list, tokens_list, errors
 
     @staticmethod
@@ -177,40 +181,42 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--num_workers", type=int, default=8)
 
         parser.add_argument("--max_len", type=int, default=250)
+        parser.add_argument("--check_sample_every_n_epoch", type=int, default=5)
         parser.add_argument("--num_samples", type=int, default=256)
         parser.add_argument("--sample_batch_size", type=int, default=256)
         parser.add_argument("--test_num_samples", type=int, default=30000)
+        
         parser.add_argument("--disable_loc", action="store_true")
         parser.add_argument("--disable_edgelogit", action="store_true")
-        
+        parser.add_argument("--disable_branchidx", action="store_true")
+
         return parser
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     BaseGeneratorLightningModule.add_args(parser)
     parser.add_argument("--max_epochs", type=int, default=100)
-    parser.add_argument("--check_val_every_n_epoch", type=int, default=5)
     parser.add_argument("--gradient_clip_val", type=float, default=0.5)
     parser.add_argument("--load_checkpoint_path", type=str, default="")
     parser.add_argument("--tag", type=str, default="default")
     hparams = parser.parse_args()
 
     model = BaseGeneratorLightningModule(hparams)
-    #model.load_state_dict(torch.load(hparams.load_checkpoint_path)["state_dict"])
+    # model.load_state_dict(torch.load(hparams.load_checkpoint_path)["state_dict"])
 
     neptune_logger = NeptuneLogger(project="sungsahn0215/molgen", close_after_fit=False)
     neptune_logger.run["params"] = vars(hparams)
     neptune_logger.run["sys/tags"].add(hparams.tag.split("_"))
-    #checkpoint_callback = ModelCheckpoint(
-    #    dirpath=os.path.join("../resource/checkpoint/", hparams.tag), monitor="validation/loss/total", mode="min",
-    #)
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=os.path.join("../resource/checkpoint/", hparams.tag), monitor="validation/loss/total", mode="min",
+    )
     trainer = pl.Trainer(
         gpus=1,
         logger=neptune_logger,
         default_root_dir="../resource/log/",
         max_epochs=hparams.max_epochs,
-        #callbacks=[checkpoint_callback],
-        check_val_every_n_epoch=hparams.check_val_every_n_epoch, 
+        callbacks=[checkpoint_callback],
         gradient_clip_val=hparams.gradient_clip_val,
     )
     trainer.fit(model)

@@ -34,15 +34,10 @@ class TokenEmbedding(nn.Module):
     def forward(self, tokens):
         return self.embedding(tokens.long()) * math.sqrt(self.emb_size)
 
+
 class BaseEncoder(nn.Module):
     def __init__(
-        self,
-        tokenizer,
-        num_layers,
-        emb_size,
-        nhead,
-        dim_feedforward,
-        dropout,
+        self, tokenizer, num_layers, emb_size, nhead, dim_feedforward, dropout,
     ):
         super(BaseEncoder, self).__init__()
         self.nhead = nhead
@@ -51,7 +46,7 @@ class BaseEncoder(nn.Module):
 
         #
         self.tok_emb = TokenEmbedding(vocab_size, emb_size)
-        
+
         #
         self.input_dropout = nn.Dropout(dropout)
 
@@ -67,7 +62,7 @@ class BaseEncoder(nn.Module):
         sequences, distance_squares = src
         sequence_len = sequences.size(1)
         sequences = sequences.transpose(0, 1)
-            
+
         #
         out = self.tok_emb(sequences)
         out = self.input_dropout(out)
@@ -80,16 +75,10 @@ class BaseEncoder(nn.Module):
 
         return memory, key_padding_mask
 
+
 class BaseDecoder(nn.Module):
     def __init__(
-        self,
-        tokenizer,
-        num_layers,
-        emb_size,
-        nhead,
-        dim_feedforward,
-        dropout,
-        use_linedistance,
+        self, tokenizer, num_layers, emb_size, nhead, dim_feedforward, dropout, use_linedistance,
     ):
         super(BaseDecoder, self).__init__()
         self.nhead = nhead
@@ -99,7 +88,7 @@ class BaseDecoder(nn.Module):
         #
         self.tok_emb = TokenEmbedding(vocab_size, emb_size)
         self.pos_emb = AbsolutePositionalEncoding(emb_size)
-        
+
         #
         self.input_dropout = nn.Dropout(dropout)
 
@@ -116,11 +105,11 @@ class BaseDecoder(nn.Module):
         self.generator = nn.Linear(emb_size, vocab_size)
 
     def forward(self, tgt, memory, memory_key_padding_mask):
-        sequences, distance_squares, isopen_squares, _ = tgt        
+        sequences, distance_squares, isopen_squares, _ = tgt
         batch_size = sequences.size(0)
         sequence_len = sequences.size(1)
         sequences = sequences.transpose(0, 1)
-            
+
         #
         out = self.tok_emb(sequences) + self.pos_emb(sequence_len)
         out = self.input_dropout(out)
@@ -140,47 +129,32 @@ class BaseDecoder(nn.Module):
         bool_mask = bool_mask.view(1, 1, sequence_len, sequence_len).repeat(batch_size, self.nhead, 1, 1).to(out.device)
         mask = mask.masked_fill(bool_mask == 0, float("-inf"))
         mask = mask.reshape(-1, sequence_len, sequence_len)
-        
+
         #
         key_padding_mask = (sequences == self.tokenizer.token_to_id("<pad>")).transpose(0, 1)
 
         out = self.transformer(
-            out, 
-            memory, 
-            tgt_mask=mask, 
+            out,
+            memory,
+            tgt_mask=mask,
             memory_mask=None,
             tgt_key_padding_mask=key_padding_mask,
-            memory_key_padding_mask=memory_key_padding_mask
-            )
+            memory_key_padding_mask=memory_key_padding_mask,
+        )
         out = out.transpose(0, 1)
         logits = self.generator(out)
-        
+
         return logits
 
 
 class BaseTranslator(nn.Module):
     def __init__(
-        self,
-        tokenizer,
-        num_layers,
-        emb_size,
-        nhead,
-        dim_feedforward,
-        dropout, 
-        use_linedistance,
+        self, tokenizer, num_layers, emb_size, nhead, dim_feedforward, dropout, use_linedistance,
     ):
         super(BaseTranslator, self).__init__()
         self.tokenizer = tokenizer
         self.encoder = BaseEncoder(tokenizer, num_layers, emb_size, nhead, dim_feedforward, dropout)
-        self.decoder = BaseDecoder(
-            tokenizer, 
-            num_layers, 
-            emb_size, 
-            nhead,
-            dim_feedforward, 
-            dropout, 
-            use_linedistance
-        )
+        self.decoder = BaseDecoder(tokenizer, num_layers, emb_size, nhead, dim_feedforward, dropout, use_linedistance)
 
     def forward(self, src, tgt):
         memory, memory_key_padding_mask = self.encoder(src)
@@ -195,7 +169,7 @@ class BaseTranslator(nn.Module):
             #
             tgt = TargetData.collate([state.featurize(self.tokenizer) for state in tgt_data_list])
             tgt = [tsr.to(device) for tsr in tgt]
-            
+
             #
             ended = tgt[-1]
             if ended.all().item():
