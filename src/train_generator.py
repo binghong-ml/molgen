@@ -40,6 +40,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             nhead=hparams.nhead,
             dim_feedforward=hparams.dim_feedforward,
             dropout=hparams.dropout,
+            disable_branchidx=hparams.disable_branchidx,
             disable_loc=hparams.disable_loc,
             disable_edgelogit = hparams.disable_edgelogit,
        )
@@ -95,7 +96,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         return loss
 
     def validation_epoch_end(self, outputs):
-        num_samples = self.hparams.num_samples if self.sanity_checked else 256
+        num_samples = self.hparams.num_samples if self.sanity_checked else 10
         max_len = self.hparams.max_len if self.sanity_checked else 10
         maybe_smiles_list, tokens_list, errors = self.sample(num_samples, max_len)
 
@@ -165,12 +166,12 @@ class BaseGeneratorLightningModule(pl.LightningModule):
     def add_args(parser):
         parser.add_argument("--dataset_name", type=str, default="zinc")
 
-        parser.add_argument("--num_layers", type=int, default=3)
-        parser.add_argument("--emb_size", type=int, default=1024)
-        parser.add_argument("--nhead", type=int, default=8)
-        parser.add_argument("--dim_feedforward", type=int, default=2048)
+        parser.add_argument("--num_layers", type=int, default=3) #6
+        parser.add_argument("--emb_size", type=int, default=1024) #1024
+        parser.add_argument("--nhead", type=int, default=8) #8
+        parser.add_argument("--dim_feedforward", type=int, default=2048) #2048
         parser.add_argument("--dropout", type=int, default=0.1)
-        parser.add_argument("--logit_hidden_dim", type=int, default=256)
+        parser.add_argument("--logit_hidden_dim", type=int, default=256) #256
 
         parser.add_argument("--lr", type=float, default=1e-4)
         parser.add_argument("--batch_size", type=int, default=256)
@@ -180,6 +181,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--num_samples", type=int, default=256)
         parser.add_argument("--sample_batch_size", type=int, default=256)
         parser.add_argument("--test_num_samples", type=int, default=30000)
+        parser.add_argument("--disable_branchidx", action="store_true")
         parser.add_argument("--disable_loc", action="store_true")
         parser.add_argument("--disable_edgelogit", action="store_true")
         
@@ -198,18 +200,23 @@ if __name__ == "__main__":
     model = BaseGeneratorLightningModule(hparams)
     #model.load_state_dict(torch.load(hparams.load_checkpoint_path)["state_dict"])
 
-    neptune_logger = NeptuneLogger(project="sungsahn0215/molgen", close_after_fit=False)
+    neptune_logger = NeptuneLogger(
+        project="sungsahn0215/molgen", close_after_fit=False, source_files='**/*.py'
+        )
     neptune_logger.run["params"] = vars(hparams)
     neptune_logger.run["sys/tags"].add(hparams.tag.split("_"))
-    #checkpoint_callback = ModelCheckpoint(
-    #    dirpath=os.path.join("../resource/checkpoint/", hparams.tag), monitor="validation/loss/total", mode="min",
-    #)
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=os.path.join("../resource/checkpoint/", 
+        hparams.tag), 
+        monitor="validation/loss/total", 
+        mode="min",
+    )
     trainer = pl.Trainer(
         gpus=1,
         logger=neptune_logger,
         default_root_dir="../resource/log/",
         max_epochs=hparams.max_epochs,
-        #callbacks=[checkpoint_callback],
+        callbacks=[checkpoint_callback],
         check_val_every_n_epoch=hparams.check_val_every_n_epoch, 
         gradient_clip_val=hparams.gradient_clip_val,
     )

@@ -3,6 +3,7 @@
 
 from itertools import combinations
 import random
+from networkx.algorithms.shortest_paths.dense import floyd_warshall_numpy
 import numpy as np
 from scipy import sparse
 import networkx as nx
@@ -44,6 +45,8 @@ RING_ID_END = RING_ID_START + len(RING_START_TOKENS)
 TOKEN2ID = {token: idx for idx, token in enumerate(TOKENS)}
 ID2TOKEN = {idx: token for idx, token in enumerate(TOKENS)}
 
+MAX_LEN=100
+HASH_MAX_LEN = 500
 
 def get_id(token):
     return TOKEN2ID[token]
@@ -84,6 +87,9 @@ class Data:
         self.eos_node = None
 
         self.masks = []
+
+        self._branch_offset = -1
+        self.node2branch_idx = []
 
         self.update(get_id(BOS_TOKEN))
 
@@ -129,8 +135,8 @@ class Data:
             self.G.add_edge(self.pointer_node, new_node)
 
             #
-            self.position_G.add_edge(self.pointer_node, new_node, weight=10**6)
-            self.position_G.add_edge(new_node, self.pointer_node, weight=10**3)
+            self.position_G.add_edge(self.pointer_node, new_node, weight=HASH_MAX_LEN**4)
+            self.position_G.add_edge(new_node, self.pointer_node, weight=HASH_MAX_LEN**3)
         
         self.pointer_node = new_node
 
@@ -154,6 +160,9 @@ class Data:
 
             self.ring_idx_to_nodes[ring_idx].append(new_node)
 
+        #
+        self.node2branch_idx.append(0)
+
     def add_branch_start_token(self, new_node):
         if self.pointer_node is None:
             self.set_error("( added at start.")
@@ -167,8 +176,8 @@ class Data:
         self.G.add_edge(self.pointer_node, new_node)
 
         #        
-        self.position_G.add_edge(self.pointer_node, new_node, weight=10**6)
-        self.position_G.add_edge(new_node, self.pointer_node, weight=10**3)
+        self.position_G.add_edge(self.pointer_node, new_node, weight=HASH_MAX_LEN**2)
+        self.position_G.add_edge(new_node, self.pointer_node, weight=HASH_MAX_LEN)
 
         prev_branch_start_nodes = [node for node in self.G.predecessors(self.pointer_node) if node != new_node]
         if len(prev_branch_start_nodes) > 0:
@@ -177,6 +186,10 @@ class Data:
             
         self.branch_start_nodes.append(new_node)
         self.pointer_node = new_node
+
+        #
+        self.node2branch_idx.append(self._branch_offset + 1)
+        self._branch_offset += 1
         
     def add_branch_end_token(self, new_node):
         if self.pointer_node is None:
@@ -195,18 +208,23 @@ class Data:
         self.G.add_edge(self.pointer_node, new_node)
 
         #
-        self.position_G.add_edge(self.pointer_node, new_node, weight=10**6)
-        self.position_G.add_edge(new_node, self.pointer_node, weight=10**3)
+        self.position_G.add_edge(self.pointer_node, new_node, weight=HASH_MAX_LEN**2)
+        self.position_G.add_edge(new_node, self.pointer_node, weight=HASH_MAX_LEN)
 
         branch_start_node = self.branch_start_nodes.pop()
         self.pointer_node = next(self.G.predecessors(branch_start_node))
 
+        #
+        self.node2branch_idx.append(self.node2branch_idx[branch_start_node])
+        
     def add_bos_token(self, new_node):
         if self.pointer_node is not None:
             self.set_error("[bos] added at non-start.")
             return
 
         self.bos_node = new_node
+
+        self.node2branch_idx.append(0)
 
     def add_eos_token(self, new_node):
         if self.pointer_node is None:
@@ -229,6 +247,8 @@ class Data:
         self.ended = True
         self.pointer_node = None
         self.eos_node = new_node
+
+        self.node2branch_idx.append(0)
 
     def save_current_features(self):
         # prepare mask feature
@@ -257,7 +277,6 @@ class Data:
             forbidden_tokens.append(BRANCH_END_TOKEN)
         else:
             forbidden_tokens.append(EOS_TOKEN)
-        
         
         exists_open_ring = False
         for possible_ring_idx in range(POSSIBLE_RING_IDXS):
@@ -326,7 +345,6 @@ class Data:
             if token in BOND_TOKENS:
                 node0, node1 = next(mollinegraph.successors(node)), next(mollinegraph.predecessors(node))
                 molgraph.add_edge(node0, node1, token=token)
-
         
         for dangling_atom_node0, dangling_atom_node1 in self.ring_idx_to_nodes.values():
             dangling_bond_node0 = next(mollinegraph.predecessors(dangling_atom_node0))
@@ -356,16 +374,12 @@ class Data:
         start = min(molgraph.nodes, key=keyfunc)
         
         dfs_successors = dict(nx.dfs_successors(molgraph, source=start))
-        
-        dfs_traj = []
-        to_visit = [start]
-        while to_visit:
-            current = to_visit.pop()
-            dfs_traj.append(current)
-            to_visit += dfs_successors.get(current, [])
+        dfs_predecessors = dict()
+        for node0 in dfs_successors:
+            for node1 in dfs_successors[node0]:
+                dfs_predecessors[node1] = node0
 
-        node2dfsidx = {node: idx for idx, node in enumerate(dfs_traj)}
-
+        #
         edges = set()
         for n_idx, n_jdxs in dfs_successors.items():
             for n_jdx in n_jdxs:
@@ -374,40 +388,58 @@ class Data:
         ring_edges = [edge for edge in molgraph.edges if tuple(edge) not in edges]
 
         node_offset = molgraph.number_of_nodes()
+        ring_successors = defaultdict(list)
+        ring_predecessors = dict()
+        ring_node2ring_idx = dict()
+        ring_node2node = dict()
         for idx, edge in enumerate(ring_edges):
             node0, node1 = edge
-            node0, node1 = sorted([node0, node1], key=node2dfsidx.get)
             ring_node0, ring_node1 = node_offset, node_offset+1
             node_offset += 2
 
-            atom_tokens[ring_node0] = get_ring_start_token(idx)
-            atom_tokens[ring_node1] = get_ring_end_token(idx)
-            bond_tokens[node0, ring_node0] = bond_tokens[node0, node1]
-            bond_tokens[node1, ring_node1] = bond_tokens[node0, node1]
+            ring_successors[node0].append(ring_node1)
+            ring_successors[node1].append(ring_node0)
+            ring_predecessors[ring_node0] = node1
+            ring_predecessors[ring_node1] = node0
 
-            dfs_successors[node0] = [ring_node0] + dfs_successors.get(node0, [])
-            dfs_successors[node1] = [ring_node1] + dfs_successors.get(node1, [])
-
-        dfs_predecessors = dict()
-        for node0 in dfs_successors:
-            for node1 in dfs_successors[node0]:
-                dfs_predecessors[node1] = node0
-
+            ring_node2ring_idx[ring_node0] = idx
+            ring_node2ring_idx[ring_node1] = idx
+            ring_node2node[ring_node0] = node0
+            ring_node2node[ring_node1] = node1
+            
         tokens = []
         to_visit = [start]
+        seen_rings = []
         while to_visit:
             current = to_visit.pop()
             if current in [BRANCH_START_TOKEN, BRANCH_END_TOKEN]:
                 tokens.append(current)
-            else:
+            elif current in atom_tokens:
                 if current in dfs_predecessors:
                     tokens.append(bond_tokens[dfs_predecessors[current], current])
             
                 tokens.append(atom_tokens[current])
+
+            elif current in ring_node2ring_idx:
+                tokens.append(bond_tokens[ring_predecessors[current], ring_node2node[current]])
             
-            next_nodes = dfs_successors.get(current, [])
+                ring_idx = ring_node2ring_idx[current]
+                if ring_idx not in seen_rings:
+                    tokens.append(get_ring_start_token(len(seen_rings)))
+                    seen_rings.append(ring_idx)
+                else:
+                    tokens.append(get_ring_end_token(seen_rings.index(ring_idx)))
+
+            else:
+                assert False
+            
+            next_nodes = [node for node in ring_successors.get(current, []) if node in seen_rings] 
+            next_nodes += dfs_successors.get(current, [])
+            next_nodes += [node for node in ring_successors.get(current, []) if node not in seen_rings] 
+
             if len(next_nodes) == 1:
                 to_visit.append(next_nodes[0])
+
             elif len(next_nodes) > 1:
                 for next_node in reversed(next_nodes):
                     to_visit.append(BRANCH_END_TOKEN)
@@ -416,67 +448,104 @@ class Data:
 
         data = Data()
         for token in tokens:
-            prev_mask = data.masks[-1]
-            if prev_mask[get_id(token)] is True:
-                print(data.tokens)
-                assert False
-
             data.update(get_id(token))
             if data.error is not None:
                 print(data.error)
                 assert False
 
         data.update(get_id(EOS_TOKEN))
+
         return data
 
     def featurize(self):
+        #
         sequence = torch.LongTensor(self.ids)
+
+        #
+        branch_sequence = torch.LongTensor(self.node2branch_idx)
+
+        #
         num_nodes = self.G.number_of_nodes()
         distance_square = torch.abs(torch.arange(num_nodes).unsqueeze(0) - torch.arange(num_nodes).unsqueeze(1)) + 1
-        
+        distance_square[distance_square>MAX_LEN] = MAX_LEN
+
+
         #
-        shortest_path_lengths = dict(shortest_path_length(self.position_G, weight='weight'))
-        up_loc_square = np.full((num_nodes, num_nodes), -1, dtype=int)
-        down_loc_square = np.full((num_nodes, num_nodes), -1, dtype=int)
-        right_loc_square = np.full((num_nodes, num_nodes), -1, dtype=int)
+        path_lens = floyd_warshall_numpy(self.position_G, weight="weight")
+        inf_mask = np.isinf(path_lens)
+        path_lens = path_lens.astype(int)
+        up_loc_square, path_lens = divmod(path_lens, HASH_MAX_LEN**4)
+        down_loc_square, path_lens = divmod(path_lens, HASH_MAX_LEN**3)
+        branch_up_loc_square, path_lens = divmod(path_lens, HASH_MAX_LEN**2)
+        branch_down_loc_square, path_lens = divmod(path_lens, HASH_MAX_LEN)
+        branch_right_loc_square = path_lens
 
-        for i in range(num_nodes):
-            for j in range(num_nodes):
-                path_len = shortest_path_lengths[i].get(j, None)
-                if path_len is None:
-                    continue
-                
-                up_loc_square[i, j], path_len = divmod(path_len, 10**6)
-                down_loc_square[i, j], path_len = divmod(path_len, 10**3)
-                right_loc_square[i, j] = path_len
+        def regularize_loc_square(loc_square):
+            loc_square = loc_square + 1
+            loc_square[inf_mask] = 0
+            loc_square[loc_square>MAX_LEN] = MAX_LEN
+            loc_square = torch.LongTensor(loc_square)
+            return loc_square
 
-        up_loc_square += 2
-        down_loc_square += 2
-        right_loc_square += 2
-
-        up_loc_square = torch.LongTensor(up_loc_square)
-        down_loc_square = torch.LongTensor(down_loc_square)
-        right_loc_square = torch.LongTensor(right_loc_square)
+        up_loc_square, down_loc_square, branch_up_loc_square, branch_down_loc_square, branch_right_loc_square = list(map(
+            regularize_loc_square, [
+                up_loc_square, down_loc_square, branch_up_loc_square, branch_down_loc_square, branch_right_loc_square
+                ]
+            ))
 
         masks = torch.tensor(self.masks, dtype=torch.bool)
 
-        return sequence, distance_square, up_loc_square, down_loc_square, right_loc_square, masks
+        return (
+            sequence, 
+            branch_sequence, 
+            distance_square, 
+            up_loc_square, 
+            down_loc_square, 
+            branch_up_loc_square, 
+            branch_down_loc_square, 
+            branch_right_loc_square, 
+            masks
+        )
         
 
     @staticmethod
     def collate(data_list):
-        sequences, distance_squares, up_loc_squares, down_loc_squares, right_loc_squares, masks = zip(*data_list)
-        sequences = pad_sequence(sequences, batch_first=True, padding_value=get_id(PAD_TOKEN))
+        (
+            sequences, 
+            branch_sequences, 
+            distance_squares, 
+            up_loc_squares, 
+            down_loc_squares, 
+            branch_up_loc_squares, 
+            branch_down_loc_squares, 
+            branch_right_loc_squares, 
+            masks
+         ) = zip(*data_list)
         
+        sequences = pad_sequence(sequences, batch_first=True, padding_value=get_id(PAD_TOKEN))
+        branch_sequences = pad_sequence(branch_sequences, batch_first=True, padding_value=0)
+
         distance_squares = pad_square(distance_squares, padding_value=0)
         up_loc_squares = pad_square(up_loc_squares, padding_value=0)
         down_loc_squares = pad_square(down_loc_squares, padding_value=0)
-        right_loc_squares = pad_square(right_loc_squares, padding_value=0)
+        branch_up_loc_squares = pad_square(branch_up_loc_squares, padding_value=0)
+        branch_down_loc_squares = pad_square(branch_down_loc_squares, padding_value=0)
+        branch_right_loc_squares = pad_square(branch_right_loc_squares, padding_value=0)
 
         masks = pad_sequence(masks, batch_first=True, padding_value=0)
 
-        return sequences, distance_squares, up_loc_squares, down_loc_squares, right_loc_squares, masks
-
+        return (
+            sequences, 
+            branch_sequences, 
+            distance_squares, 
+            up_loc_squares, 
+            down_loc_squares, 
+            branch_up_loc_squares, 
+            branch_down_loc_squares, 
+            branch_right_loc_squares, 
+            masks
+        )
+        
 def pad_square(squares, padding_value=0):
     max_dim = max([square.size(0) for square in squares])
     batched_squares = torch.full((len(squares), max_dim, max_dim), padding_value, dtype=torch.long)

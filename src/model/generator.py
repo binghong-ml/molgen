@@ -7,7 +7,7 @@ import math
 from tqdm import tqdm
 from joblib import Parallel, delayed
 
-from data.util import PAD_TOKEN, TOKENS, RING_ID_START, RING_ID_END, Data, get_id
+from data.util import PAD_TOKEN, TOKENS, RING_ID_START, RING_ID_END, Data, get_id, MAX_LEN
 # helper Module to convert tensor of input indices into corresponding tensor of token embeddings
 class TokenEmbedding(nn.Module):
     def __init__(self, vocab_size, emb_size):
@@ -52,6 +52,7 @@ class BaseGenerator(nn.Module):
         nhead,
         dim_feedforward,
         dropout,
+        disable_branchidx, 
         disable_loc,
         disable_edgelogit,
     ):
@@ -60,17 +61,23 @@ class BaseGenerator(nn.Module):
 
         #
         self.token_embedding_layer = TokenEmbedding(len(TOKENS), emb_size)
-        
+        self.disable_branchidx = disable_branchidx
+        if not self.disable_branchidx:
+            self.branch_embedding_layer = TokenEmbedding(MAX_LEN, emb_size)
+
         #
         self.input_dropout = nn.Dropout(dropout)
 
         #
-        self.distance_embedding_layer = nn.Embedding(250, nhead)
+        self.distance_embedding_layer = nn.Embedding(MAX_LEN+1, nhead)
         
         self.disable_loc = disable_loc
-        self.up_loc_embedding_layer = nn.Embedding(250, nhead)
-        self.down_loc_embedding_layer = nn.Embedding(250, nhead)
-        self.right_loc_embedding_layer = nn.Embedding(250, nhead)
+        if not self.disable_loc:
+            self.up_loc_embedding_layer = nn.Embedding(MAX_LEN+1, nhead)
+            self.down_loc_embedding_layer = nn.Embedding(MAX_LEN+1, nhead)
+            self.branch_up_loc_embedding_layer = nn.Embedding(MAX_LEN+1, nhead)
+            self.branch_down_loc_embedding_layer = nn.Embedding(MAX_LEN+1, nhead)
+            self.branch_right_loc_embedding_layer = nn.Embedding(MAX_LEN+1, nhead)
 
         #
         encoder_layer = nn.TransformerEncoderLayer(emb_size, nhead, dim_feedforward, dropout, "gelu")
@@ -91,21 +98,44 @@ class BaseGenerator(nn.Module):
         
 
     def forward(self, batched_data):
-        sequences, distance_squares, up_loc_squares, down_loc_squares, right_loc_squares, pred_masks = batched_data
+        (
+            sequences, 
+            branch_sequences, 
+            distance_squares, 
+            up_loc_squares, 
+            down_loc_squares, 
+            branch_up_loc_squares, 
+            branch_down_loc_squares, 
+            branch_right_loc_squares, 
+            pred_masks
+        ) = batched_data
         batch_size = sequences.size(0)
         sequence_len = sequences.size(1)
             
         #
         out = self.token_embedding_layer(sequences)
+        if not self.disable_branchidx:
+            out += self.branch_embedding_layer(branch_sequences)
+            out /= 2
+
         out = self.input_dropout(out)
 
         #
         mask = self.distance_embedding_layer(distance_squares)
+        cnt = 1
         if not self.disable_loc:
             mask += self.up_loc_embedding_layer(up_loc_squares)
             mask += self.down_loc_embedding_layer(down_loc_squares)
-            mask += self.right_loc_embedding_layer(right_loc_squares)
+            mask += self.branch_up_loc_embedding_layer(branch_up_loc_squares)
+            mask += self.branch_down_loc_embedding_layer(branch_down_loc_squares)
+            mask += self.branch_right_loc_embedding_layer(branch_right_loc_squares)
+            cnt += 5
         
+        #if not self.disable_ring_loc:
+        #    mask += self.ring_loc_embedding_layer(ring_pos_square)
+        #    cnt += 1 
+
+        mask /= cnt
         mask = mask.permute(0, 3, 1, 2)
         
         #
@@ -144,7 +174,7 @@ class BaseGenerator(nn.Module):
             data.update(id)
             return data
         
-        for _ in range(max_len):
+        for _ in tqdm(range(max_len)):
             if len(data_list) == 0:
                 break
 
