@@ -8,7 +8,7 @@ import math
 from tqdm import tqdm
 from joblib import Parallel, delayed
 
-from data.util import PAD_TOKEN, TOKENS, RING_ID_START, RING_ID_END, MAX_LEN, Data, get_id
+from data.target_data import PAD_TOKEN, TOKENS, RING_ID_START, RING_ID_END, MAX_LEN, Data, get_id
 
 # helper Module to convert tensor of input indices into corresponding tensor of token embeddings
 class TokenEmbedding(nn.Module):
@@ -109,12 +109,11 @@ class BaseGenerator(nn.Module):
 
         #
         mask = self.distance_embedding_layer(distance_squares)
-        cnt = 1
         if not self.disable_loc:
             mask += self.up_loc_embedding_layer(up_loc_squares)
             mask += self.down_loc_embedding_layer(down_loc_squares)
             mask += self.right_loc_embedding_layer(right_loc_squares)
-        
+
         mask = mask.permute(0, 3, 1, 2)
 
         #

@@ -1,7 +1,8 @@
 import os
 from pathlib import Path
 from torch.utils.data import Dataset
-from data.util import Data
+from data.target_data import Data as TargetData
+from data.source_data import Data as SourceData
 
 DATA_DIR = "../resource/data"
 
@@ -18,13 +19,13 @@ class ZincDataset(Dataset):
 
     def __getitem__(self, idx):
         smiles = self.smiles_list[idx]
-        return Data.from_smiles(smiles).featurize()
+        return SourceData.from_smiles(smiles).featurize()
 
 
 class ZincAutoEncoderDataset(ZincDataset):
     def __getitem__(self, idx):
         smiles = self.smiles_list[idx]
-        sequence = Data.from_smiles((smiles))
+        sequence = SourceData.from_smiles((smiles))
         return sequence, sequence
 
 
@@ -65,11 +66,10 @@ class LogP04Dataset(Dataset):
         if self.split == "train":
             src_smiles = self.src_smiles_list[idx]
             tgt_smiles = self.tgt_smiles_list[idx]
-            return Data.from_smiles(src_smiles).featurize(), Data.from_smiles(tgt_smiles).featurize()
+            return SourceData.from_smiles(src_smiles).featurize(), TargetData.from_smiles(tgt_smiles).featurize()
         else:
             smiles = self.smiles_list[idx]
-            sequence = Data.from_smiles(smiles).featurize()
-            return sequence, sequence
+            return SourceData.from_smiles(smiles).featurize(), smiles
 
 
 class LogP06Dataset(LogP04Dataset):

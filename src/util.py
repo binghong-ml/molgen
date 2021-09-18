@@ -39,3 +39,12 @@ def canonicalize(smiles):
         return None, "zero length smiles"
 
     return smiles, None
+
+
+def pad_square(squares, padding_value=0):
+    max_dim = max([square.size(0) for square in squares])
+    batched_squares = torch.full((len(squares), max_dim, max_dim), padding_value, dtype=torch.long)
+    for idx, square in enumerate(squares):
+        batched_squares[idx, : square.size(0), : square.size(1)] = square
+
+    return batched_squares

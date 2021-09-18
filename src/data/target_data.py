@@ -1,23 +1,17 @@
 # https://github.com/dakoner/keras-molecules/blob/dbbb790e74e406faa70b13e8be8104d9e938eba2/convert_rdkit_to_networkx.py
 # https://github.com/snap-stanford/pretrain-gnns/blob/80608723ac3aac0f7059ffa0558f082252524493/chem/loader.py#L260
 
-from itertools import combinations
-import random
 from networkx.algorithms.shortest_paths.dense import floyd_warshall_numpy
 import numpy as np
-from scipy import sparse
 import networkx as nx
-from networkx.algorithms.shortest_paths.generic import shortest_path, shortest_path_length
 import torch
 
-from rdkit import Chem
 from copy import copy
 
-# from rdkit import rdBase
-# rdBase.DisableLog('rdApp.error')
 from torch.nn.utils.rnn import pad_sequence
 
 from data.smiles import TOKEN2ATOMFEAT, TOKEN2BONDFEAT, molgraph2smiles, smiles2molgraph
+from util import pad_square
 from collections import defaultdict
 
 BOS_TOKEN = "[bos]"
@@ -31,7 +25,7 @@ BRANCH_START_TOKEN = "("
 BRANCH_END_TOKEN = ")"
 BRANCH_TOKENS = [BRANCH_START_TOKEN, BRANCH_END_TOKEN]
 
-POSSIBLE_RING_IDXS = 20
+POSSIBLE_RING_IDXS = 40
 RING_START_TOKENS = [f"[bor{idx}]" for idx in range(POSSIBLE_RING_IDXS)]
 IDX2RING_START_TOKEN = {idx: token for token, idx in enumerate(RING_START_TOKENS)}
 RING_END_TOKENS = [f"[eor{idx}]" for idx in range(POSSIBLE_RING_IDXS)]
@@ -46,8 +40,8 @@ RING_ID_END = RING_ID_START + len(RING_START_TOKENS)
 TOKEN2ID = {token: idx for idx, token in enumerate(TOKENS)}
 ID2TOKEN = {idx: token for idx, token in enumerate(TOKENS)}
 
-MAX_LEN = 250
 HASH_KEY = 500
+MAX_LEN = 250
 
 
 def get_id(token):
@@ -281,7 +275,7 @@ class Data:
             forbidden_tokens.append(BRANCH_END_TOKEN)
         else:
             forbidden_tokens.append(EOS_TOKEN)
-        
+
         exists_open_ring = False
         for possible_ring_idx in range(POSSIBLE_RING_IDXS):
             num_idxs = len(self.ring_idx_to_nodes.get(possible_ring_idx, []))
@@ -318,14 +312,7 @@ class Data:
 
     def to_smiles(self):
         mollinegraph = self.G.copy()
-        if self.bos_node is None:
-            return "", "[bos] not added."
-
         mollinegraph.remove_node(self.bos_node)
-
-        if self.eos_node is None:
-            return "", "[eos] not added."
-
         mollinegraph.remove_node(self.eos_node)
 
         for node in list(mollinegraph.nodes()):
@@ -361,106 +348,7 @@ class Data:
 
         smiles = molgraph2smiles(molgraph)
 
-        return smiles, None
-
-    """
-    @staticmethod
-    def from_smiles(smiles):
-        molgraph = smiles2molgraph(smiles)
-        atom_tokens = nx.get_node_attributes(molgraph, "token")
-        bond_tokens = nx.get_edge_attributes(molgraph, "token")
-        bond_tokens.update({(node1, node0): val for (node0, node1), val in bond_tokens.items()})
-
-        def keyfunc(idx):
-            return (molgraph.degree(idx), molgraph.nodes[idx].get('token')[0] == 6, idx)
-
-        tokens = nx.get_node_attributes(molgraph, "token")
-        start = min(molgraph.nodes, key=keyfunc)
-        
-        dfs_successors = dict(nx.dfs_successors(molgraph, source=start))
-        dfs_predecessors = dict()
-        for node0 in dfs_successors:
-            for node1 in dfs_successors[node0]:
-                dfs_predecessors[node1] = node0
-
-        #
-        edges = set()
-        for n_idx, n_jdxs in dfs_successors.items():
-            for n_jdx in n_jdxs:
-                edges.add((n_idx, n_jdx))
-        
-        ring_edges = [edge for edge in molgraph.edges if tuple(edge) not in edges]
-
-        node_offset = molgraph.number_of_nodes()
-        ring_successors = defaultdict(list)
-        ring_predecessors = dict()
-        ring_node2ring_idx = dict()
-        ring_node2node = dict()
-        for idx, edge in enumerate(ring_edges):
-            node0, node1 = edge
-            ring_node0, ring_node1 = node_offset, node_offset+1
-            node_offset += 2
-
-            ring_successors[node0].append(ring_node1)
-            ring_successors[node1].append(ring_node0)
-            ring_predecessors[ring_node0] = node1
-            ring_predecessors[ring_node1] = node0
-
-            ring_node2ring_idx[ring_node0] = idx
-            ring_node2ring_idx[ring_node1] = idx
-            ring_node2node[ring_node0] = node0
-            ring_node2node[ring_node1] = node1
-            
-        tokens = []
-        to_visit = [start]
-        seen_rings = []
-        while to_visit:
-            current = to_visit.pop()
-            if current in [BRANCH_START_TOKEN, BRANCH_END_TOKEN]:
-                tokens.append(current)
-            elif current in atom_tokens:
-                if current in dfs_predecessors:
-                    tokens.append(bond_tokens[dfs_predecessors[current], current])
-            
-                tokens.append(atom_tokens[current])
-
-            elif current in ring_node2ring_idx:
-                tokens.append(bond_tokens[ring_predecessors[current], ring_node2node[current]])
-            
-                ring_idx = ring_node2ring_idx[current]
-                if ring_idx not in seen_rings:
-                    tokens.append(get_ring_start_token(len(seen_rings)))
-                    seen_rings.append(ring_idx)
-                else:
-                    tokens.append(get_ring_end_token(seen_rings.index(ring_idx)))
-
-            else:
-                assert False
-            
-            #next_nodes = [node for node in ring_successors.get(current, []) if node in seen_rings] 
-            next_nodes = dfs_successors.get(current, [])
-            next_nodes += [node for node in ring_successors.get(current, [])] 
-
-            if len(next_nodes) == 1:
-                to_visit.append(next_nodes[0])
-
-            elif len(next_nodes) > 1:
-                for next_node in reversed(next_nodes):
-                    to_visit.append(BRANCH_END_TOKEN)
-                    to_visit.append(next_node)
-                    to_visit.append(BRANCH_START_TOKEN)          
-
-        data = Data()
-        for token in tokens:
-            data.update(get_id(token))
-            if data.error is not None:
-                print(data.error)
-                assert False
-
-        data.update(get_id(EOS_TOKEN))
-
-        return data
-        """
+        return smiles
 
     @staticmethod
     def from_smiles(smiles):
@@ -568,9 +456,9 @@ class Data:
         #
         num_nodes = self.G.number_of_nodes()
         distance_square = torch.abs(torch.arange(num_nodes).unsqueeze(0) - torch.arange(num_nodes).unsqueeze(1)) + 1
-
+        distance_square[distance_square > MAX_LEN] = MAX_LEN
+        
         #
-        MAX_LEN = 250
         path_lens = floyd_warshall_numpy(self.position_G, weight="weight")
         inf_mask = np.isinf(path_lens)
         path_lens = path_lens.astype(int)
@@ -609,12 +497,3 @@ class Data:
         masks = pad_sequence(masks, batch_first=True, padding_value=0)
 
         return sequences, branch_sequences, distance_squares, up_loc_squares, down_loc_squares, right_loc_squares, masks
-
-
-def pad_square(squares, padding_value=0):
-    max_dim = max([square.size(0) for square in squares])
-    batched_squares = torch.full((len(squares), max_dim, max_dim), padding_value, dtype=torch.long)
-    for idx, square in enumerate(squares):
-        batched_squares[idx, : square.size(0), : square.size(1)] = square
-
-    return batched_squares

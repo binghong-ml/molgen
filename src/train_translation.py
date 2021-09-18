@@ -14,7 +14,8 @@ from neptune.new.integrations.pytorch_lightning import NeptuneLogger
 
 from model.translator import BaseTranslator
 from data.dataset import LogP04Dataset, LogP06Dataset, DRD2Dataset, QEDDataset
-from data.data import SourceData, TargetData
+from data.source_data import Data as SourceData
+from data.target_data import Data as TargetData
 from util import compute_sequence_cross_entropy, compute_sequence_accuracy, canonicalize
 
 
@@ -35,8 +36,6 @@ class BaseTranslatorLightningModule(pl.LightningModule):
         self.val_dataset = dataset_cls("valid")
         self.test_dataset = dataset_cls("test")
 
-        self.tokenizer = self.train_dataset.tokenizer
-
         def train_collate(data_list):
             src, tgt = zip(*data_list)
             src = SourceData.collate(src)
@@ -54,13 +53,11 @@ class BaseTranslatorLightningModule(pl.LightningModule):
 
     def setup_model(self, hparams):
         self.model = BaseTranslator(
-            self.tokenizer,
             hparams.num_layers,
             hparams.emb_size,
             hparams.nhead,
             hparams.dim_feedforward,
             hparams.dropout,
-            False,
         )
 
     ### Dataloaders and optimizers
@@ -127,10 +124,22 @@ class BaseTranslatorLightningModule(pl.LightningModule):
 
         smiles_list = []
         for tgt_data, src_smiles in zip(tgt_data_list, src_smiles_list):
-            maybe_smiles = tgt_data.get_smiles()
+            if tgt_data.error is None:
+                try:
+                    maybe_smiles = tgt_data.to_smiles()
+                    error = None
+                except Exception as e:
+                    maybe_smiles = ""
+                    error = e
+
+            else:
+                maybe_smiles = ""
+                error = tgt_data.error
+
             if canonicalize(maybe_smiles) is None:
-                if self.sanity_checked:
-                    self.logger.experiment["invalid_smiles"].log(f"{self.current_epoch}, {src_smiles}, {maybe_smiles}")
+                self.logger.experiment["invalid_smiles"].log(
+                    f"{self.current_epoch}, {src_smiles}, {maybe_smiles}, {error}"
+                    )
             else:
                 smiles_list.append(maybe_smiles)
 
@@ -150,7 +159,7 @@ class BaseTranslatorLightningModule(pl.LightningModule):
                 tgt_data_list = self.model.decode(src, max_len=self.hparams.max_len, device=self.device)
 
             for src_smiles, tgt_data in zip(src_smiles_list, tgt_data_list):
-                maybe_smiles = tgt_data.get_smiles()
+                maybe_smiles = tgt_data.to_smiles()
                 if canonicalize(maybe_smiles) is None:
                     invalid += 1
 
@@ -197,7 +206,7 @@ if __name__ == "__main__":
 
     model = BaseTranslatorLightningModule(hparams)
     # if hparams.load_checkpoint_path != "":
-    model.load_state_dict(torch.load(hparams.load_checkpoint_path)["state_dict"])
+    #model.load_state_dict(torch.load(hparams.load_checkpoint_path)["state_dict"])
 
     if not hparams.debug:
         logger = NeptuneLogger(project="sungsahn0215/molgen", close_after_fit=False)
