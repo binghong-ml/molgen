@@ -1,3 +1,4 @@
+from tqdm import tqdm
 import torch
 import torch.nn as nn
 from torch.distributions import Categorical
@@ -164,7 +165,7 @@ class BaseTranslator(nn.Module):
             data.update(id)
             return data
 
-        for _ in range(max_len):
+        for _ in tqdm(range(max_len)):
             if len(data_list) == 0:
                 break
 

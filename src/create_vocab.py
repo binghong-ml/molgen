@@ -8,10 +8,13 @@ def canonicalize(smiles):
     return Chem.MolToSmiles(Chem.MolFromSmiles(smiles))
 
 
-for smiles_list_dir in ["../resource/data/zinc/raw", "../resource/data/zinc/raw/"]:
-    for split in ["train", "valid", "test"]:
+for smiles_list_dir in ["../resource/data/drd2/raw", "../resource/data/qed/raw/"]:
+    for split in ["train_pairs", "valid", "test"]:
         smiles_list_path = f"{smiles_list_dir}/{split}.txt"
-        smiles_list = Path(smiles_list_path).read_text(encoding="utf-8").splitlines()
+        smiles_list = [
+            smiles for pair in Path(smiles_list_path).read_text(encoding="utf-8").splitlines() for smiles in pair.split()
+        ]
+        #smiles_list = Path(smiles_list_path).read_text(encoding="utf-8").splitlines()
         for smiles in tqdm(smiles_list):
             smiles = Chem.MolToSmiles(Chem.MolFromSmiles(smiles))
             data = SourceData.from_smiles(smiles)

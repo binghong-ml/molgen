@@ -10,6 +10,7 @@ TOKEN2ATOMFEAT = {
     "C@@H": (6, ChiralType.CHI_TETRAHEDRAL_CCW, 0, 1),
     "C@": (6, ChiralType.CHI_TETRAHEDRAL_CW, 0, 0),
     "C@H": (6, ChiralType.CHI_TETRAHEDRAL_CW, 0, 1),
+    "CH2": (6, ChiralType.CHI_UNSPECIFIED, 0, 2),
     "CH-": (6, ChiralType.CHI_UNSPECIFIED, -1, 1),
     "CH2-": (6, ChiralType.CHI_UNSPECIFIED, -1, 2),
     "C": (6, ChiralType.CHI_UNSPECIFIED, 0, 0),
@@ -40,10 +41,12 @@ TOKEN2ATOMFEAT = {
     "S-": (16, ChiralType.CHI_UNSPECIFIED, -1, 0),
     "S": (16, ChiralType.CHI_UNSPECIFIED, 0, 0),
     "S+": (16, ChiralType.CHI_UNSPECIFIED, 1, 0),
+    "SH": (16, ChiralType.CHI_UNSPECIFIED, 0, 1),
     "SH+": (16, ChiralType.CHI_UNSPECIFIED, 1, 1),
     "Cl": (17, ChiralType.CHI_UNSPECIFIED, 0, 0),
     "Br": (35, ChiralType.CHI_UNSPECIFIED, 0, 0),
     "I": (53, ChiralType.CHI_UNSPECIFIED, 0, 0),
+    
 }
 ATOMFEAT2TOKEN = {val: key for key, val in TOKEN2ATOMFEAT.items()}
 TOKEN2BONDFEAT = {

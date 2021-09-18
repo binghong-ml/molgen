@@ -118,7 +118,6 @@ class BaseTranslatorLightningModule(pl.LightningModule):
         statistics = dict()
         src, src_smiles_list = batched_data
         max_len = self.hparams.max_len if self.sanity_checked else 10
-
         with torch.no_grad():
             tgt_data_list = self.model.decode(src, max_len=max_len, device=self.device)
 
@@ -127,45 +126,37 @@ class BaseTranslatorLightningModule(pl.LightningModule):
             if tgt_data.error is None:
                 try:
                     maybe_smiles = tgt_data.to_smiles()
-                    error = None
+                    smiles, error = canonicalize(maybe_smiles)
+                    smiles_list.append(smiles)
                 except Exception as e:
                     maybe_smiles = ""
                     error = e
-
             else:
                 maybe_smiles = ""
                 error = tgt_data.error
 
-            if canonicalize(maybe_smiles) is None:
+            if error is not None:
                 self.logger.experiment["invalid_smiles"].log(
                     f"{self.current_epoch}, {src_smiles}, {maybe_smiles}, {error}"
                     )
-            else:
-                smiles_list.append(maybe_smiles)
 
-        statistics["validation/valid"] = float(len(smiles_list)) / src[0].size(0)
-        statistics["validation/unique"] = (
-            float(len(set(smiles_list))) / len(smiles_list) if len(smiles_list) > 0 else 0.0
-        )
+        batch_size = src[0].size(0)    
+        statistics["validation/valid"] = float(len(smiles_list)) / batch_size
+        statistics["validation/unique"] = float(len(set(smiles_list))) / batch_size
+        
         for key, val in statistics.items():
             self.log(key, val, on_step=False, on_epoch=True, logger=True)
 
     def test_step(self, batched_data, batch_idx):
         src, src_smiles_list = batched_data
         src_smiles2tgt_smiles_list = defaultdict(list)
-        invalid = 0
         for _ in range(self.hparams.num_repeats):
             with torch.no_grad():
                 tgt_data_list = self.model.decode(src, max_len=self.hparams.max_len, device=self.device)
 
             for src_smiles, tgt_data in zip(src_smiles_list, tgt_data_list):
                 maybe_smiles = tgt_data.to_smiles()
-                if canonicalize(maybe_smiles) is None:
-                    invalid += 1
-
                 src_smiles2tgt_smiles_list[src_smiles].append(maybe_smiles)
-
-        print(float(invalid) / self.hparams.num_repeats / src[0].size(0))
 
         dict_path = os.path.join(self.hparams.checkpoint_dir, "test_pairs.txt")
         for src_smiles in src_smiles_list:
@@ -176,7 +167,7 @@ class BaseTranslatorLightningModule(pl.LightningModule):
     def add_args(parser):
         parser.add_argument("--dataset_name", type=str, default="logp04")
 
-        parser.add_argument("--num_layers", type=int, default=6)
+        parser.add_argument("--num_layers", type=int, default=3)
         parser.add_argument("--emb_size", type=int, default=1024)
         parser.add_argument("--nhead", type=int, default=8)
         parser.add_argument("--dim_feedforward", type=int, default=2048)
@@ -199,27 +190,23 @@ if __name__ == "__main__":
     parser.add_argument("--max_epochs", type=int, default=500)
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--gradient_clip_val", type=float, default=0.5)
-    parser.add_argument("--checkpoint_dir", type=str, default="../resource/checkpoint/default")
     parser.add_argument("--load_checkpoint_path", type=str, default="")
     parser.add_argument("--tag", type=str, default="default")
     hparams = parser.parse_args()
 
+    
     model = BaseTranslatorLightningModule(hparams)
-    # if hparams.load_checkpoint_path != "":
-    #model.load_state_dict(torch.load(hparams.load_checkpoint_path)["state_dict"])
+    if hparams.load_checkpoint_path != "":
+        model.load_state_dict(torch.load(hparams.load_checkpoint_path)["state_dict"])
 
-    if not hparams.debug:
-        logger = NeptuneLogger(project="sungsahn0215/molgen", close_after_fit=False)
-        logger.run["params"] = vars(hparams)
-        logger.run["sys/tags"].add(hparams.tag.split("_"))
-        checkpoint_callback = ModelCheckpoint(
-            dirpath=os.path.join("../resource/checkpoint/", hparams.tag), monitor="validation/valid", mode="max",
-        )
-        callbacks = [checkpoint_callback]
-    else:
-        logger = None
-        callbacks = []
-
+    logger = NeptuneLogger(project="sungsahn0215/molgen", close_after_fit=False)
+    logger.run["params"] = vars(hparams)
+    logger.run["sys/tags"].add(hparams.tag.split("_"))
+    
+    hparams.checkpoint_dir = os.path.join("../resource/checkpoint/", hparams.tag)
+    checkpoint_callback = ModelCheckpoint(dirpath=hparams.checkpoint_dir, monitor="train/loss/total", mode="min")
+    callbacks = [checkpoint_callback]
+    
     trainer = pl.Trainer(
         gpus=1,
         logger=logger,

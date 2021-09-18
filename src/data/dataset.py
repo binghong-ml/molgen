@@ -10,22 +10,23 @@ DATA_DIR = "../resource/data"
 class ZincDataset(Dataset):
     raw_dir = f"{DATA_DIR}/zinc/raw"
 
-    def __init__(self, split):
+    def __init__(self, split, ring_last=False):
         smiles_list_path = os.path.join(self.raw_dir, f"{split}.txt")
         self.smiles_list = Path(smiles_list_path).read_text(encoding="utf=8").splitlines()
+        self.ring_last = ring_last
 
     def __len__(self):
         return len(self.smiles_list)
 
     def __getitem__(self, idx):
         smiles = self.smiles_list[idx]
-        return TargetData.from_smiles(smiles).featurize()
+        return TargetData.from_smiles(smiles, ring_last=self.ring_last).featurize()
 
 
 class ZincAutoEncoderDataset(ZincDataset):
     def __getitem__(self, idx):
         smiles = self.smiles_list[idx]
-        return TargetData.from_smiles(smiles), SourceData.from_smiles(smiles)
+        return SourceData.from_smiles(smiles), TargetData.from_smiles(smiles)
 
 
 class MosesDataset(ZincDataset):

@@ -351,7 +351,7 @@ class Data:
         return smiles
 
     @staticmethod
-    def from_smiles(smiles):
+    def from_smiles(smiles, ring_last=False):
         molgraph = smiles2molgraph(smiles)
         atom_tokens = nx.get_node_attributes(molgraph, "token")
         bond_tokens = nx.get_edge_attributes(molgraph, "token")
@@ -423,10 +423,13 @@ class Data:
             else:
                 assert False
 
-            # next_nodes = [node for node in ring_successors.get(current, []) if node in seen_rings]
-            next_nodes = dfs_successors.get(current, [])
-            next_nodes += [node for node in ring_successors.get(current, [])]
-
+            if ring_last:
+                next_nodes = dfs_successors.get(current, [])
+                next_nodes += [node for node in ring_successors.get(current, [])]
+            else:
+                next_nodes = [node for node in ring_successors.get(current, [])]
+                next_nodes += dfs_successors.get(current, [])
+                
             if len(next_nodes) == 1:
                 to_visit.append(next_nodes[0])
 
@@ -457,7 +460,7 @@ class Data:
         num_nodes = self.G.number_of_nodes()
         distance_square = torch.abs(torch.arange(num_nodes).unsqueeze(0) - torch.arange(num_nodes).unsqueeze(1)) + 1
         distance_square[distance_square > MAX_LEN] = MAX_LEN
-        
+
         #
         path_lens = floyd_warshall_numpy(self.position_G, weight="weight")
         inf_mask = np.isinf(path_lens)

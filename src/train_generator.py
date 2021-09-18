@@ -28,9 +28,9 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
     def setup_datasets(self, hparams):
         dataset_cls = {"zinc": ZincDataset, "moses": MosesDataset, "polymer": PolymerDataset}.get(hparams.dataset_name)
-        self.train_dataset = dataset_cls("train")
-        self.val_dataset = dataset_cls("valid")
-        self.test_dataset = dataset_cls("test")
+        self.train_dataset = dataset_cls("train", ring_last=hparams.ring_last)
+        self.val_dataset = dataset_cls("valid", ring_last=hparams.ring_last)
+        self.test_dataset = dataset_cls("test", ring_last=hparams.ring_last)
         self.train_smiles_set = set(self.train_dataset.smiles_list)
 
     def setup_model(self, hparams):
@@ -125,8 +125,8 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
         statistics = dict()
         statistics["sample/valid"] = float(len(smiles_list)) / num_samples
-        statistics["sample/unique"] = float(len(unique_smiles_set)) / num_samples if len(smiles_list) > 0 else 0.0
-        statistics["sample/novel"] = float(len(novel_smiles_set)) / num_samples if len(smiles_list) > 0 else 0.0
+        statistics["sample/unique"] = float(len(unique_smiles_set)) / num_samples
+        statistics["sample/novel"] = float(len(novel_smiles_set)) / num_samples
 
         for key, val in statistics.items():
             self.log(key, val, on_step=False, on_epoch=True, logger=True)
@@ -174,7 +174,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--logit_hidden_dim", type=int, default=256)  # 256
 
         parser.add_argument("--lr", type=float, default=1e-4)
-        parser.add_argument("--batch_size", type=int, default=128)
+        parser.add_argument("--batch_size", type=int, default=256)
         parser.add_argument("--num_workers", type=int, default=8)
 
         parser.add_argument("--max_len", type=int, default=250)
@@ -186,6 +186,8 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--disable_loc", action="store_true")
         parser.add_argument("--disable_edgelogit", action="store_true")
         parser.add_argument("--disable_branchidx", action="store_true")
+
+        parser.add_argument("--ring_last", action="store_true")
 
         return parser
 
