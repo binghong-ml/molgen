@@ -433,9 +433,9 @@ class Data:
             else:
                 assert False
             
-            next_nodes = [node for node in ring_successors.get(current, []) if node in seen_rings] 
-            next_nodes += dfs_successors.get(current, [])
-            next_nodes += [node for node in ring_successors.get(current, []) if node not in seen_rings] 
+            #next_nodes = [node for node in ring_successors.get(current, []) if node in seen_rings] 
+            next_nodes = dfs_successors.get(current, [])
+            next_nodes += [node for node in ring_successors.get(current, [])] 
 
             if len(next_nodes) == 1:
                 to_visit.append(next_nodes[0])
