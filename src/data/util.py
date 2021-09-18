@@ -45,7 +45,7 @@ RING_ID_END = RING_ID_START + len(RING_START_TOKENS)
 TOKEN2ID = {token: idx for idx, token in enumerate(TOKENS)}
 ID2TOKEN = {idx: token for idx, token in enumerate(TOKENS)}
 
-MAX_LEN=100
+MAX_LEN = 250
 HASH_MAX_LEN = 500
 
 def get_id(token):
@@ -135,8 +135,8 @@ class Data:
             self.G.add_edge(self.pointer_node, new_node)
 
             #
-            self.position_G.add_edge(self.pointer_node, new_node, weight=HASH_MAX_LEN**4)
-            self.position_G.add_edge(new_node, self.pointer_node, weight=HASH_MAX_LEN**3)
+            self.position_G.add_edge(self.pointer_node, new_node, weight=HASH_MAX_LEN**2)
+            self.position_G.add_edge(new_node, self.pointer_node, weight=HASH_MAX_LEN)
         
         self.pointer_node = new_node
 
@@ -474,11 +474,9 @@ class Data:
         path_lens = floyd_warshall_numpy(self.position_G, weight="weight")
         inf_mask = np.isinf(path_lens)
         path_lens = path_lens.astype(int)
-        up_loc_square, path_lens = divmod(path_lens, HASH_MAX_LEN**4)
-        down_loc_square, path_lens = divmod(path_lens, HASH_MAX_LEN**3)
-        branch_up_loc_square, path_lens = divmod(path_lens, HASH_MAX_LEN**2)
-        branch_down_loc_square, path_lens = divmod(path_lens, HASH_MAX_LEN)
-        branch_right_loc_square = path_lens
+        up_loc_square, path_lens = divmod(path_lens, HASH_MAX_LEN**2)
+        down_loc_square, path_lens = divmod(path_lens, HASH_MAX_LEN)
+        right_loc_square = path_lens
 
         def regularize_loc_square(loc_square):
             loc_square = loc_square + 1
@@ -487,10 +485,8 @@ class Data:
             loc_square = torch.LongTensor(loc_square)
             return loc_square
 
-        up_loc_square, down_loc_square, branch_up_loc_square, branch_down_loc_square, branch_right_loc_square = list(map(
-            regularize_loc_square, [
-                up_loc_square, down_loc_square, branch_up_loc_square, branch_down_loc_square, branch_right_loc_square
-                ]
+        up_loc_square, down_loc_square, right_loc_square = list(map(
+            regularize_loc_square, [up_loc_square, down_loc_square, right_loc_square]
             ))
 
         masks = torch.tensor(self.masks, dtype=torch.bool)
@@ -501,9 +497,7 @@ class Data:
             distance_square, 
             up_loc_square, 
             down_loc_square, 
-            branch_up_loc_square, 
-            branch_down_loc_square, 
-            branch_right_loc_square, 
+            right_loc_square, 
             masks
         )
         
@@ -516,9 +510,7 @@ class Data:
             distance_squares, 
             up_loc_squares, 
             down_loc_squares, 
-            branch_up_loc_squares, 
-            branch_down_loc_squares, 
-            branch_right_loc_squares, 
+            right_loc_squares, 
             masks
          ) = zip(*data_list)
         
@@ -528,9 +520,7 @@ class Data:
         distance_squares = pad_square(distance_squares, padding_value=0)
         up_loc_squares = pad_square(up_loc_squares, padding_value=0)
         down_loc_squares = pad_square(down_loc_squares, padding_value=0)
-        branch_up_loc_squares = pad_square(branch_up_loc_squares, padding_value=0)
-        branch_down_loc_squares = pad_square(branch_down_loc_squares, padding_value=0)
-        branch_right_loc_squares = pad_square(branch_right_loc_squares, padding_value=0)
+        right_loc_squares = pad_square(right_loc_squares, padding_value=0)
 
         masks = pad_sequence(masks, batch_first=True, padding_value=0)
 
@@ -538,11 +528,9 @@ class Data:
             sequences, 
             branch_sequences, 
             distance_squares, 
-            up_loc_squares, 
-            down_loc_squares, 
-            branch_up_loc_squares, 
-            branch_down_loc_squares, 
-            branch_right_loc_squares, 
+            up_loc_squares,
+            down_loc_squares,
+            right_loc_squares,
             masks
         )
         

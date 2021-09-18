@@ -75,9 +75,7 @@ class BaseGenerator(nn.Module):
         if not self.disable_loc:
             self.up_loc_embedding_layer = nn.Embedding(MAX_LEN+1, nhead)
             self.down_loc_embedding_layer = nn.Embedding(MAX_LEN+1, nhead)
-            self.branch_up_loc_embedding_layer = nn.Embedding(MAX_LEN+1, nhead)
-            self.branch_down_loc_embedding_layer = nn.Embedding(MAX_LEN+1, nhead)
-            self.branch_right_loc_embedding_layer = nn.Embedding(MAX_LEN+1, nhead)
+            self.right_loc_embedding_layer = nn.Embedding(MAX_LEN+1, nhead)
 
         #
         encoder_layer = nn.TransformerEncoderLayer(emb_size, nhead, dim_feedforward, dropout, "gelu")
@@ -104,9 +102,7 @@ class BaseGenerator(nn.Module):
             distance_squares, 
             up_loc_squares, 
             down_loc_squares, 
-            branch_up_loc_squares, 
-            branch_down_loc_squares, 
-            branch_right_loc_squares, 
+            right_loc_squares, 
             pred_masks
         ) = batched_data
         batch_size = sequences.size(0)
@@ -126,9 +122,7 @@ class BaseGenerator(nn.Module):
         if not self.disable_loc:
             mask += self.up_loc_embedding_layer(up_loc_squares)
             mask += self.down_loc_embedding_layer(down_loc_squares)
-            mask += self.branch_up_loc_embedding_layer(branch_up_loc_squares)
-            mask += self.branch_down_loc_embedding_layer(branch_down_loc_squares)
-            mask += self.branch_right_loc_embedding_layer(branch_right_loc_squares)
+            mask += self.right_loc_embedding_layer(right_loc_squares)
             cnt += 5
         
         #if not self.disable_ring_loc:
