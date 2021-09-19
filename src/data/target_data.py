@@ -356,7 +356,7 @@ class Data:
         return smiles
 
     @staticmethod
-    def from_smiles(smiles, simple=False, randomize_dfs=False):
+    def from_smiles(smiles, simple=False):
         molgraph = smiles2molgraph(smiles, simple=simple)
         atom_tokens = nx.get_node_attributes(molgraph, "token")
         bond_tokens = nx.get_edge_attributes(molgraph, "token")
@@ -367,9 +367,8 @@ class Data:
         def keyfunc(idx):
             return (molgraph.degree(idx), molgraph.nodes[idx].get("token")[0] == 6, idx)
 
-        start = min(molgraph.nodes, key=keyfunc) if not randomize_dfs else None
-        
-        successors = dfs_successors(molgraph, source=start, randomize_neighbors=randomize_dfs)
+        start = min(molgraph.nodes, key=keyfunc)
+        successors = dfs_successors(molgraph, source=start, randomize_neighbors=True)
         predecessors = dict()
         for node0 in successors:
             for node1 in successors[node0]:

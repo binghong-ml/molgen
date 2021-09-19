@@ -34,9 +34,9 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             "simplemoses": SimpleMosesDataset,
             "qm9": QM9Dataset,
         }.get(hparams.dataset_name)
-        self.train_dataset = dataset_cls("train", randomize_dfs=hparams.randomize_dfs)
-        self.val_dataset = dataset_cls("valid", randomize_dfs=hparams.randomize_dfs)
-        self.test_dataset = dataset_cls("test", randomize_dfs=hparams.randomize_dfs)
+        self.train_dataset = dataset_cls("train")
+        self.val_dataset = dataset_cls("valid")
+        self.test_dataset = dataset_cls("test")
         self.train_smiles_set = set(self.train_dataset.smiles_list)
 
     def setup_model(self, hparams):
