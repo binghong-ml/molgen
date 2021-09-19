@@ -191,12 +191,12 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--logit_hidden_dim", type=int, default=256)
 
         parser.add_argument("--lr", type=float, default=1e-4)
-        parser.add_argument("--batch_size", type=int, default=256)
+        parser.add_argument("--batch_size", type=int, default=128)
         parser.add_argument("--num_workers", type=int, default=8)
 
         parser.add_argument("--max_len", type=int, default=250)
         parser.add_argument("--check_sample_every_n_epoch", type=int, default=1)
-        parser.add_argument("--num_samples", type=int, default=256)
+        parser.add_argument("--num_samples", type=int, default=128)
         parser.add_argument("--sample_batch_size", type=int, default=1000)
         parser.add_argument("--test_num_samples", type=int, default=10000)
 
