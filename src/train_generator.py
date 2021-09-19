@@ -74,23 +74,10 @@ class BaseGeneratorLightningModule(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
             self.parameters(), 
-            lr=self.hparams.peak_lr, 
+            lr=self.hparams.lr, 
             weight_decay=self.hparams.weight_decay
             )
-        scheduler = {
-            'scheduler': PolynomialDecayLR(
-                optimizer,
-                warmup_updates=self.hparams.warmup_updates,
-                tot_updates=self.hparams.tot_updates,
-                lr=self.hparams.peak_lr,
-                end_lr=self.hparams.end_lr,
-                power=1.0,
-            ),
-            'name': 'learning_rate',
-            'interval': 'step',
-            'frequency': 1,
-        }
-        return [optimizer], [scheduler]
+        return [optimizer]
 
     ### Main steps
     def shared_step(self, batched_data):
@@ -110,8 +97,8 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         for key, val in statistics.items():
             self.log(f"train/{key}", val, on_step=True, logger=True)
 
-        self.lr_schedulers().step()
-        self.log(f"lr", self.lr_schedulers().get_lr())
+        #self.lr_schedulers().step()
+        #self.log(f"lr", self.lr_schedulers().get_lr())
         return loss
 
     def validation_step(self, batched_data, batch_idx):
@@ -245,13 +232,12 @@ if __name__ == "__main__":
     checkpoint_callback = ModelCheckpoint(
         dirpath=os.path.join("../resource/checkpoint/", hparams.tag), monitor="validation/loss/total", mode="min",
     )
-    lr_monitor = LearningRateMonitor(logging_interval='step')
     trainer = pl.Trainer(
         gpus=1,
         logger=neptune_logger,
         default_root_dir="../resource/log/",
         max_epochs=hparams.max_epochs,
-        callbacks=[lr_monitor, checkpoint_callback],
+        callbacks=[checkpoint_callback],
         gradient_clip_val=hparams.gradient_clip_val,
     )
     trainer.fit(model)
