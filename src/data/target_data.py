@@ -266,6 +266,8 @@ class Data:
             )
         elif self.tokens[self.pointer_node] in (ATOM_TOKENS + RING_START_TOKENS + RING_END_TOKENS):
             forbidden_tokens += ATOM_TOKENS + RING_START_TOKENS + RING_END_TOKENS
+            if self.tokens[self.pointer_node] in [RING_END_TOKENS]:
+                forbidden_tokens += BRANCH_START_TOKEN + BOND_TOKENS
 
         elif self.tokens[self.pointer_node] in BOND_TOKENS:
             forbidden_tokens += [EOS_TOKEN] + BOND_TOKENS + [BRANCH_START_TOKEN, BRANCH_END_TOKEN]

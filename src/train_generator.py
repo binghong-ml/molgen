@@ -6,12 +6,13 @@ import torch
 from torch.utils.data import DataLoader
 
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from neptune.new.integrations.pytorch_lightning import NeptuneLogger
 
 import moses
 
 from model.generator import BaseGenerator
+from model.lr import PolynomialDecayLR
 from data.dataset import ZincDataset, MosesDataset, SimpleMosesDataset, QM9Dataset
 from data.target_data import Data
 from util import compute_sequence_accuracy, compute_sequence_cross_entropy, canonicalize
@@ -71,8 +72,25 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         )
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.hparams.lr)
-        return [optimizer]
+        optimizer = torch.optim.AdamW(
+            self.parameters(), 
+            lr=self.hparams.peak_lr, 
+            weight_decay=self.hparams.weight_decay
+            )
+        scheduler = {
+            'scheduler': PolynomialDecayLR(
+                optimizer,
+                warmup_updates=self.hparams.warmup_updates,
+                tot_updates=self.hparams.tot_updates,
+                lr=self.hparams.peak_lr,
+                end_lr=self.hparams.end_lr,
+                power=1.0,
+            ),
+            'name': 'learning_rate',
+            'interval': 'step',
+            'frequency': 1,
+        }
+        return [optimizer], [scheduler]
 
     ### Main steps
     def shared_step(self, batched_data):
@@ -92,6 +110,8 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         for key, val in statistics.items():
             self.log(f"train/{key}", val, on_step=True, logger=True)
 
+        self.lr_schedulers().step()
+        self.log(f"lr", self.lr_schedulers().get_lr())
         return loss
 
     def validation_step(self, batched_data, batch_idx):
@@ -197,7 +217,11 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--disable_edgelogit", action="store_true")
         parser.add_argument("--disable_branchidx", action="store_true")
 
-        parser.add_argument("--randomize_dfs", action="store_true")
+        parser.add_argument('--warmup_updates', type=int, default=10000)
+        parser.add_argument('--tot_updates', type=int, default=200000)
+        parser.add_argument('--peak_lr', type=float, default=2e-4)
+        parser.add_argument('--end_lr', type=float, default=1e-9)
+        parser.add_argument('--weight_decay', type=float, default=0.01)
 
         return parser
 
@@ -221,12 +245,13 @@ if __name__ == "__main__":
     checkpoint_callback = ModelCheckpoint(
         dirpath=os.path.join("../resource/checkpoint/", hparams.tag), monitor="validation/loss/total", mode="min",
     )
+    lr_monitor = LearningRateMonitor(logging_interval='step')
     trainer = pl.Trainer(
         gpus=1,
         logger=neptune_logger,
         default_root_dir="../resource/log/",
         max_epochs=hparams.max_epochs,
-        callbacks=[checkpoint_callback],
+        callbacks=[lr_monitor, checkpoint_callback],
         gradient_clip_val=hparams.gradient_clip_val,
     )
     trainer.fit(model)

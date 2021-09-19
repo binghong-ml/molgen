@@ -178,9 +178,13 @@ class BaseTranslator(nn.Module):
             data_list = parallel(delayed(_update_data)(pair) for pair in zip(data_list, preds.tolist()))
 
             ended_data_list += [data for data in data_list if data.ended]
-            data_idx_list, data_list = map(
-                list, zip(*[(idx, data) for idx, data in zip(data_idx_list, data_list) if not data.ended])
-            )
+
+            if len(ended_data_list) < len(data_list):
+                data_idx_list, data_list = map(
+                    list, zip(*[(idx, data) for idx, data in zip(data_idx_list, data_list) if not data.ended])
+                )
+            else:
+                data_idx_list, data_list = [], []
 
         data_list = data_list + ended_data_list
 
