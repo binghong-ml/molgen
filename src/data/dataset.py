@@ -11,16 +11,16 @@ class ZincDataset(Dataset):
     raw_dir = f"{DATA_DIR}/zinc"
     simple = True
 
-    def __init__(self, split):
+    def __init__(self, split, randomize_dfs):
         smiles_list_path = os.path.join(self.raw_dir, f"{split}.txt")
         self.smiles_list = Path(smiles_list_path).read_text(encoding="utf=8").splitlines()
-
+        self.randomize_dfs = randomize_dfs
     def __len__(self):
         return len(self.smiles_list)
 
     def __getitem__(self, idx):
         smiles = self.smiles_list[idx]
-        return TargetData.from_smiles(smiles, simple=self.simple).featurize()
+        return TargetData.from_smiles(smiles, simple=self.simple, randomize_dfs=self.randomize_dfs).featurize()
 
 
 class QM9Dataset(ZincDataset):
@@ -41,7 +41,7 @@ class MosesDataset(ZincDataset):
 class LogP04Dataset(Dataset):
     raw_dir = f"{DATA_DIR}/logp04"
     simple = False
-    
+
     def __init__(self, split):
         self.split = split
         if self.split == "train":
@@ -65,12 +65,12 @@ class LogP04Dataset(Dataset):
             src_smiles = self.src_smiles_list[idx]
             tgt_smiles = self.tgt_smiles_list[idx]
             return (
-                SourceData.from_smiles(src_smiles, simple=self.simple).featurize(),
-                TargetData.from_smiles(tgt_smiles, simple=self.simple).featurize(),
+                SourceData.from_smiles(src_smiles).featurize(),
+                TargetData.from_smiles(tgt_smiles).featurize(),
             )
         else:
             smiles = self.smiles_list[idx]
-            return SourceData.from_smiles(smiles, simple=self.simple).featurize(), smiles
+            return SourceData.from_smiles(smiles).featurize(), smiles
 
 
 class LogP06Dataset(LogP04Dataset):

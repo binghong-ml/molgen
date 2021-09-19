@@ -34,9 +34,9 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             "simplemoses": SimpleMosesDataset,
             "qm9": QM9Dataset,
         }.get(hparams.dataset_name)
-        self.train_dataset = dataset_cls("train")
-        self.val_dataset = dataset_cls("valid")
-        self.test_dataset = dataset_cls("test")
+        self.train_dataset = dataset_cls("train", randomize_dfs=hparams.randomize_dfs)
+        self.val_dataset = dataset_cls("valid", randomize_dfs=hparams.randomize_dfs)
+        self.test_dataset = dataset_cls("test", randomize_dfs=hparams.randomize_dfs)
         self.train_smiles_set = set(self.train_dataset.smiles_list)
 
     def setup_model(self, hparams):
@@ -196,6 +196,8 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--disable_loc", action="store_true")
         parser.add_argument("--disable_edgelogit", action="store_true")
         parser.add_argument("--disable_branchidx", action="store_true")
+
+        parser.add_argument("--randomize_dfs", action="store_true")
 
         return parser
 

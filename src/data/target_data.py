@@ -12,6 +12,8 @@ from copy import copy
 from torch.nn.utils.rnn import pad_sequence
 
 from data.smiles import TOKEN2ATOMFEAT, TOKEN2BONDFEAT, molgraph2smiles, smiles2molgraph
+from data.dfs import dfs_successors
+
 from util import pad_square
 from collections import defaultdict
 
@@ -354,30 +356,28 @@ class Data:
         return smiles
 
     @staticmethod
-    def from_smiles(smiles, simple, sorted_start=True):
+    def from_smiles(smiles, simple=False, randomize_dfs=False):
         molgraph = smiles2molgraph(smiles, simple=simple)
         atom_tokens = nx.get_node_attributes(molgraph, "token")
         bond_tokens = nx.get_edge_attributes(molgraph, "token")
         bond_tokens.update({(node1, node0): val for (node0, node1), val in bond_tokens.items()})
 
         tokens = nx.get_node_attributes(molgraph, "token")
-        if sorted_start:
-            def keyfunc(idx):
-                return (molgraph.degree(idx), molgraph.nodes[idx].get("token")[0] == 6, idx)
+        
+        def keyfunc(idx):
+            return (molgraph.degree(idx), molgraph.nodes[idx].get("token")[0] == 6, idx)
 
-            start = min(molgraph.nodes, key=keyfunc)
-        else:
-            start = random.choice(molgraph.nodes())
-
-        dfs_successors = dict(nx.dfs_successors(molgraph, source=start))
-        dfs_predecessors = dict()
-        for node0 in dfs_successors:
-            for node1 in dfs_successors[node0]:
-                dfs_predecessors[node1] = node0
+        start = min(molgraph.nodes, key=keyfunc) if not randomize_dfs else None
+        
+        successors = dfs_successors(molgraph, source=start, randomize_neighbors=randomize_dfs)
+        predecessors = dict()
+        for node0 in successors:
+            for node1 in successors[node0]:
+                predecessors[node1] = node0
 
         #
         edges = set()
-        for n_idx, n_jdxs in dfs_successors.items():
+        for n_idx, n_jdxs in successors.items():
             for n_jdx in n_jdxs:
                 edges.add((n_idx, n_jdx))
 
@@ -411,8 +411,8 @@ class Data:
             if current in [BRANCH_START_TOKEN, BRANCH_END_TOKEN]:
                 tokens.append(current)
             elif current in atom_tokens:
-                if current in dfs_predecessors:
-                    tokens.append(bond_tokens[dfs_predecessors[current], current])
+                if current in predecessors:
+                    tokens.append(bond_tokens[predecessors[current], current])
 
                 tokens.append(atom_tokens[current])
 
@@ -430,7 +430,7 @@ class Data:
                 assert False
 
             next_nodes = ring_successors.get(current, [])
-            next_nodes += dfs_successors.get(current, [])
+            next_nodes += successors.get(current, [])
 
             if len(next_nodes) == 1:
                 to_visit.append(next_nodes[0])

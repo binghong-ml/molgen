@@ -79,7 +79,7 @@ def get_bond_token(bond, simple=False):
     return BONDFEAT2TOKEN[feature]
 
 
-def smiles2molgraph(smiles, simple):
+def smiles2molgraph(smiles, simple=False):
     mol = Chem.MolFromSmiles(smiles)
     if simple:
         Chem.Kekulize(mol)
