@@ -26,7 +26,7 @@ class BaseTranslatorLightningModule(pl.LightningModule):
         self.sanity_checked = False
 
     def setup_datasets(self, hparams):
-        dataset_cls = {"zinc": ZincAutoEncoderDataset, "moses": MosesAutoEncoderDataset}.get(hparams.dataset_name)
+        dataset_cls = {"zinc": ZincAutoEncoderDataset, "moses": MosesAutoEncoderDataset,}.get(hparams.dataset_name)
         self.train_dataset = dataset_cls("train")
         self.val_dataset = dataset_cls("valid")
         self.tokenizer = self.train_dataset.tokenizer

@@ -1,6 +1,7 @@
 # https://github.com/dakoner/keras-molecules/blob/dbbb790e74e406faa70b13e8be8104d9e938eba2/convert_rdkit_to_networkx.py
 # https://github.com/snap-stanford/pretrain-gnns/blob/80608723ac3aac0f7059ffa0558f082252524493/chem/loader.py#L260
 
+import random
 from networkx.algorithms.shortest_paths.dense import floyd_warshall_numpy
 import numpy as np
 import networkx as nx
@@ -42,6 +43,8 @@ ID2TOKEN = {idx: token for idx, token in enumerate(TOKENS)}
 
 HASH_KEY = 500
 MAX_LEN = 250
+
+from time import time
 
 
 def get_id(token):
@@ -351,17 +354,20 @@ class Data:
         return smiles
 
     @staticmethod
-    def from_smiles(smiles, ring_last=False):
-        molgraph = smiles2molgraph(smiles)
+    def from_smiles(smiles, simple, sorted_start=True):
+        molgraph = smiles2molgraph(smiles, simple=simple)
         atom_tokens = nx.get_node_attributes(molgraph, "token")
         bond_tokens = nx.get_edge_attributes(molgraph, "token")
         bond_tokens.update({(node1, node0): val for (node0, node1), val in bond_tokens.items()})
 
-        def keyfunc(idx):
-            return (molgraph.degree(idx), molgraph.nodes[idx].get("token")[0] == 6, idx)
-
         tokens = nx.get_node_attributes(molgraph, "token")
-        start = min(molgraph.nodes, key=keyfunc)
+        if sorted_start:
+            def keyfunc(idx):
+                return (molgraph.degree(idx), molgraph.nodes[idx].get("token")[0] == 6, idx)
+
+            start = min(molgraph.nodes, key=keyfunc)
+        else:
+            start = random.choice(molgraph.nodes())
 
         dfs_successors = dict(nx.dfs_successors(molgraph, source=start))
         dfs_predecessors = dict()
@@ -423,13 +429,9 @@ class Data:
             else:
                 assert False
 
-            if ring_last:
-                next_nodes = dfs_successors.get(current, [])
-                next_nodes += [node for node in ring_successors.get(current, [])]
-            else:
-                next_nodes = [node for node in ring_successors.get(current, [])]
-                next_nodes += dfs_successors.get(current, [])
-                
+            next_nodes = ring_successors.get(current, [])
+            next_nodes += dfs_successors.get(current, [])
+
             if len(next_nodes) == 1:
                 to_visit.append(next_nodes[0])
 
@@ -452,9 +454,8 @@ class Data:
 
     def featurize(self):
         #
-        sequence = torch.LongTensor(self.ids)
-
-        branch_sequence = torch.LongTensor(self.branch_idxs)
+        sequence = torch.LongTensor(np.array(self.ids))
+        branch_sequence = torch.LongTensor(np.array(self.branch_idxs))
 
         #
         num_nodes = self.G.number_of_nodes()
@@ -480,7 +481,7 @@ class Data:
             map(regularize_loc_square, [up_loc_square, down_loc_square, right_loc_square])
         )
 
-        masks = torch.tensor(self.masks, dtype=torch.bool)
+        masks = torch.tensor(np.array(self.masks), dtype=torch.bool)
 
         return sequence, branch_sequence, distance_square, up_loc_square, down_loc_square, right_loc_square, masks
 

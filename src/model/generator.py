@@ -10,6 +10,8 @@ from joblib import Parallel, delayed
 
 from data.target_data import PAD_TOKEN, TOKENS, RING_ID_START, RING_ID_END, MAX_LEN, Data, get_id
 
+from time import time
+
 # helper Module to convert tensor of input indices into corresponding tensor of token embeddings
 class TokenEmbedding(nn.Module):
     def __init__(self, vocab_size, emb_size):
@@ -83,9 +85,7 @@ class BaseGenerator(nn.Module):
             self.generator = nn.Linear(emb_size, len(TOKENS))
         else:
             self.generator = nn.Linear(emb_size, len(TOKENS) - (RING_ID_END - RING_ID_START))
-        self.ring_generator = EdgeLogitLayer(emb_size=emb_size, hidden_dim=emb_size)
-
-        #
+            self.ring_generator = EdgeLogitLayer(emb_size=emb_size, hidden_dim=emb_size)
 
     def forward(self, batched_data):
         (
@@ -145,8 +145,6 @@ class BaseGenerator(nn.Module):
         data_list = [Data() for _ in range(num_samples)]
         ended_data_list = []
 
-        parallel = Parallel(n_jobs=8)
-
         def _update_data(inp):
             data, id = inp
             data.update(id)
@@ -156,12 +154,14 @@ class BaseGenerator(nn.Module):
             if len(data_list) == 0:
                 break
 
-            batched_data = Data.collate([data.featurize() for data in data_list])
+            feature_list = [data.featurize() for data in data_list]
+            batched_data = Data.collate(feature_list)
             batched_data = [tsr.to(device) for tsr in batched_data]
+
             logits = self(batched_data)
             preds = Categorical(logits=logits[:, -1]).sample()
-            data_list = parallel(delayed(_update_data)(pair) for pair in zip(data_list, preds.tolist()))
 
+            data_list = [_update_data(pair) for pair in zip(data_list, preds.tolist())]
             ended_data_list += [data for data in data_list if data.ended]
             data_list = [data for data in data_list if not data.ended]
 

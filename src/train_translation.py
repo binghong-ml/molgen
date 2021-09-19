@@ -29,7 +29,7 @@ class BaseTranslatorLightningModule(pl.LightningModule):
         self.sanity_checked = False
 
     def setup_datasets(self, hparams):
-        dataset_cls = {"logp04": LogP04Dataset, "logp06": LogP06Dataset, "drd2": DRD2Dataset, "qed": QEDDataset}.get(
+        dataset_cls = {"logp04": LogP04Dataset, "logp06": LogP06Dataset, "drd2": DRD2Dataset, "qed": QEDDataset,}.get(
             self.hparams.dataset_name
         )
         self.train_dataset = dataset_cls("train")
@@ -53,11 +53,7 @@ class BaseTranslatorLightningModule(pl.LightningModule):
 
     def setup_model(self, hparams):
         self.model = BaseTranslator(
-            hparams.num_layers,
-            hparams.emb_size,
-            hparams.nhead,
-            hparams.dim_feedforward,
-            hparams.dropout,
+            hparams.num_layers, hparams.emb_size, hparams.nhead, hparams.dim_feedforward, hparams.dropout,
         )
 
     ### Dataloaders and optimizers
@@ -138,12 +134,12 @@ class BaseTranslatorLightningModule(pl.LightningModule):
             if error is not None:
                 self.logger.experiment["invalid_smiles"].log(
                     f"{self.current_epoch}, {src_smiles}, {maybe_smiles}, {error}"
-                    )
+                )
 
-        batch_size = src[0].size(0)    
+        batch_size = src[0].size(0)
         statistics["validation/valid"] = float(len(smiles_list)) / batch_size
         statistics["validation/unique"] = float(len(set(smiles_list))) / batch_size
-        
+
         for key, val in statistics.items():
             self.log(key, val, on_step=False, on_epoch=True, logger=True)
 
@@ -194,7 +190,6 @@ if __name__ == "__main__":
     parser.add_argument("--tag", type=str, default="default")
     hparams = parser.parse_args()
 
-    
     model = BaseTranslatorLightningModule(hparams)
     if hparams.load_checkpoint_path != "":
         model.load_state_dict(torch.load(hparams.load_checkpoint_path)["state_dict"])
@@ -202,11 +197,11 @@ if __name__ == "__main__":
     logger = NeptuneLogger(project="sungsahn0215/molgen", close_after_fit=False)
     logger.run["params"] = vars(hparams)
     logger.run["sys/tags"].add(hparams.tag.split("_"))
-    
+
     hparams.checkpoint_dir = os.path.join("../resource/checkpoint/", hparams.tag)
     checkpoint_callback = ModelCheckpoint(dirpath=hparams.checkpoint_dir, monitor="train/loss/total", mode="min")
     callbacks = [checkpoint_callback]
-    
+
     trainer = pl.Trainer(
         gpus=1,
         logger=logger,

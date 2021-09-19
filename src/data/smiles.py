@@ -46,7 +46,6 @@ TOKEN2ATOMFEAT = {
     "Cl": (17, ChiralType.CHI_UNSPECIFIED, 0, 0),
     "Br": (35, ChiralType.CHI_UNSPECIFIED, 0, 0),
     "I": (53, ChiralType.CHI_UNSPECIFIED, 0, 0),
-    
 }
 ATOMFEAT2TOKEN = {val: key for key, val in TOKEN2ATOMFEAT.items()}
 TOKEN2BONDFEAT = {
@@ -62,18 +61,29 @@ TOKEN2BONDFEAT = {
 BONDFEAT2TOKEN = {val: key for key, val in TOKEN2BONDFEAT.items()}
 
 
-def get_atom_token(atom):
-    feature = (atom.GetAtomicNum(), atom.GetChiralTag(), atom.GetFormalCharge(), atom.GetNumExplicitHs())
+def get_atom_token(atom, simple=False):
+    if simple:
+        feature = (atom.GetAtomicNum(), ChiralType.CHI_UNSPECIFIED, 0, 0)
+    else:
+        feature = (atom.GetAtomicNum(), atom.GetChiralTag(), atom.GetFormalCharge(), atom.GetNumExplicitHs())
+
     return ATOMFEAT2TOKEN[feature]
 
 
-def get_bond_token(bond):
-    feature = bond.GetBondType(), bond.GetBondDir()
+def get_bond_token(bond, simple=False):
+    if simple:
+        feature = (bond.GetBondType(), BondDir.NONE)
+    else:
+        feature = (bond.GetBondType(), bond.GetBondDir())
+
     return BONDFEAT2TOKEN[feature]
 
 
-def smiles2molgraph(smiles):
+def smiles2molgraph(smiles, simple):
     mol = Chem.MolFromSmiles(smiles)
+    if simple:
+        Chem.Kekulize(mol)
+
     G = nx.Graph()
     for atom in mol.GetAtoms():
         G.add_node(atom.GetIdx(), token=get_atom_token(atom))

@@ -8,42 +8,40 @@ DATA_DIR = "../resource/data"
 
 
 class ZincDataset(Dataset):
-    raw_dir = f"{DATA_DIR}/zinc/raw"
+    raw_dir = f"{DATA_DIR}/zinc"
+    simple = True
 
-    def __init__(self, split, ring_last=False):
+    def __init__(self, split):
         smiles_list_path = os.path.join(self.raw_dir, f"{split}.txt")
         self.smiles_list = Path(smiles_list_path).read_text(encoding="utf=8").splitlines()
-        self.ring_last = ring_last
 
     def __len__(self):
         return len(self.smiles_list)
 
     def __getitem__(self, idx):
         smiles = self.smiles_list[idx]
-        return TargetData.from_smiles(smiles, ring_last=self.ring_last).featurize()
+        return TargetData.from_smiles(smiles, simple=self.simple).featurize()
 
 
-class ZincAutoEncoderDataset(ZincDataset):
-    def __getitem__(self, idx):
-        smiles = self.smiles_list[idx]
-        return SourceData.from_smiles(smiles), TargetData.from_smiles(smiles)
+class QM9Dataset(ZincDataset):
+    raw_dir = f"{DATA_DIR}/qm9"
+    simple = True
+
+
+class SimpleMosesDataset(ZincDataset):
+    raw_dir = f"{DATA_DIR}/moses"
+    simple = True
 
 
 class MosesDataset(ZincDataset):
-    raw_dir = f"{DATA_DIR}/moses/raw"
-
-
-class MosesAutoEncoderDataset(ZincAutoEncoderDataset):
-    raw_dir = f"{DATA_DIR}/moses/raw"
-
-
-class PolymerDataset(ZincDataset):
-    raw_dir = f"{DATA_DIR}/polymers/raw"
+    raw_dir = f"{DATA_DIR}/moses"
+    simple = False
 
 
 class LogP04Dataset(Dataset):
-    raw_dir = f"{DATA_DIR}/logp04/raw"
-
+    raw_dir = f"{DATA_DIR}/logp04"
+    simple = False
+    
     def __init__(self, split):
         self.split = split
         if self.split == "train":
@@ -66,19 +64,25 @@ class LogP04Dataset(Dataset):
         if self.split == "train":
             src_smiles = self.src_smiles_list[idx]
             tgt_smiles = self.tgt_smiles_list[idx]
-            return SourceData.from_smiles(src_smiles).featurize(), TargetData.from_smiles(tgt_smiles).featurize()
+            return (
+                SourceData.from_smiles(src_smiles, simple=self.simple).featurize(),
+                TargetData.from_smiles(tgt_smiles, simple=self.simple).featurize(),
+            )
         else:
             smiles = self.smiles_list[idx]
-            return SourceData.from_smiles(smiles).featurize(), smiles
+            return SourceData.from_smiles(smiles, simple=self.simple).featurize(), smiles
 
 
 class LogP06Dataset(LogP04Dataset):
-    raw_dir = f"{DATA_DIR}/logp06/raw"
+    raw_dir = f"{DATA_DIR}/logp06"
+    simple = False
 
 
 class DRD2Dataset(LogP04Dataset):
-    raw_dir = f"{DATA_DIR}/drd2/raw"
+    raw_dir = f"{DATA_DIR}/drd2"
+    simple = False
 
 
 class QEDDataset(LogP04Dataset):
-    raw_dir = f"{DATA_DIR}/qed/raw"
+    raw_dir = f"{DATA_DIR}/qed"
+    simple = False

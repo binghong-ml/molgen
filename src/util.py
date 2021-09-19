@@ -23,7 +23,7 @@ def compute_sequence_accuracy(logits, batched_sequence_data, ignore_index=0):
 def compute_sequence_cross_entropy(logits, batched_sequence_data, ignore_index=0):
     logits = logits[:, :-1]
     targets = batched_sequence_data[:, 1:]
-    loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1), ignore_index=ignore_index)
+    loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1), ignore_index=ignore_index,)
 
     return loss
 
