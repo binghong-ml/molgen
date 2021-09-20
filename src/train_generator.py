@@ -75,7 +75,6 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         optimizer = torch.optim.AdamW(
             self.parameters(), 
             lr=self.hparams.lr, 
-            weight_decay=self.hparams.weight_decay
             )
         return [optimizer]
 
@@ -213,6 +212,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_epochs", type=int, default=100)
     parser.add_argument("--gradient_clip_val", type=float, default=0.5)
     parser.add_argument("--load_checkpoint_path", type=str, default="")
+    parser.add_argument("--resume_from_checkpoint_path", type=str, default=None)
     parser.add_argument("--tag", type=str, default="default")
     hparams = parser.parse_args()
 
@@ -233,6 +233,7 @@ if __name__ == "__main__":
         max_epochs=hparams.max_epochs,
         callbacks=[checkpoint_callback],
         gradient_clip_val=hparams.gradient_clip_val,
+        resume_from_checkpoint=hparams.resume_from_checkpoint_path,
     )
     trainer.fit(model)
 

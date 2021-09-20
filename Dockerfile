@@ -25,7 +25,7 @@ RUN pip install neptune-client[pytorch-lightning]
 
 RUN pip install tokenizers
 
-RUN pip install moses
+RUN pip install molsets
 
 ENV NEPTUNE_API_TOKEN "eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiIyNjdkMDIxZi1lZDkwLTQ0ZDAtODg5Yi03ZTdjNThhYTdjMmQifQ=="
 
