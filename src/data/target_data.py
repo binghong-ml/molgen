@@ -365,7 +365,7 @@ class Data:
         bond_tokens.update({(node1, node0): val for (node0, node1), val in bond_tokens.items()})
 
         tokens = nx.get_node_attributes(molgraph, "token")
-        
+
         def keyfunc(idx):
             return (molgraph.degree(idx), molgraph.nodes[idx].get("token")[0] == 6, idx)
 

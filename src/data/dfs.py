@@ -1,6 +1,7 @@
 import random
 from collections import defaultdict
 
+
 def dfs_edges(G, source, randomize_neighbors=False):
     nodes = [source]
     visited = set()
@@ -10,8 +11,8 @@ def dfs_edges(G, source, randomize_neighbors=False):
             continue
         visited.add(start)
         successors = list(G[start])
-        
-        if randomize_neighbors: 
+
+        if randomize_neighbors:
             random.shuffle(successors)
 
         stack = [(start, iter(successors))]
@@ -27,9 +28,10 @@ def dfs_edges(G, source, randomize_neighbors=False):
             except StopIteration:
                 stack.pop()
 
+
 def dfs_successors(G, source, randomize_neighbors=False):
     d = defaultdict(list)
     for s, t in dfs_edges(G, source=source, randomize_neighbors=randomize_neighbors):
         d[s].append(t)
-        
+
     return dict(d)

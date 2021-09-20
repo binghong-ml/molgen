@@ -14,6 +14,7 @@ class ZincDataset(Dataset):
     def __init__(self, split):
         smiles_list_path = os.path.join(self.raw_dir, f"{split}.txt")
         self.smiles_list = Path(smiles_list_path).read_text(encoding="utf=8").splitlines()
+
     def __len__(self):
         return len(self.smiles_list)
 

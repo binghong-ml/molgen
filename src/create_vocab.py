@@ -1,3 +1,4 @@
+from data.smiles_dataset import tokenize, untokenize
 from rdkit import Chem
 from tqdm import tqdm
 from pathlib import Path
@@ -8,7 +9,8 @@ def canonicalize(smiles):
     return Chem.MolToSmiles(Chem.MolFromSmiles(smiles))
 
 
-for smiles_list_dir in ["../resource/data/moses"]:
+tokens = []
+for smiles_list_dir in ["../resource/data/zinc", "../resource/data/moses"]:
     for split in ["train", "valid", "test"]:
         smiles_list_path = f"{smiles_list_dir}/{split}.txt"
         smiles_list = [
@@ -16,11 +18,15 @@ for smiles_list_dir in ["../resource/data/moses"]:
             for pair in Path(smiles_list_path).read_text(encoding="utf-8").splitlines()
             for smiles in pair.split()
         ]
-        # smiles_list = Path(smiles_list_path).read_text(encoding="utf-8").splitlines()
         for smiles in tqdm(smiles_list):
-            recon_smiles = Chem.MolToSmiles(Chem.MolFromSmiles(smiles))
-            print(recon_smiles)
-            assert smiles == recon_smiles
+            if untokenize(tokenize(smiles)) != smiles:
+                assert False
+
+        # smiles_list = Path(smiles_list_path).read_text(encoding="utf-8").splitlines()
+        #for smiles in tqdm(smiles_list):
+        #    recon_smiles = Chem.MolToSmiles(Chem.MolFromSmiles(smiles))
+        #    print(recon_smiles)
+        #    assert smiles == recon_smiles
 
             # data = SourceData.from_smiles(smiles)
 

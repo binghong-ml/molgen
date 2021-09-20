@@ -5,7 +5,6 @@ from torch.optim.lr_scheduler import _LRScheduler
 
 
 class PolynomialDecayLR(_LRScheduler):
-
     def __init__(self, optimizer, warmup_updates, tot_updates, lr, end_lr, power, last_epoch=-1, verbose=False):
         self.warmup_updates = warmup_updates
         self.tot_updates = tot_updates
@@ -23,9 +22,7 @@ class PolynomialDecayLR(_LRScheduler):
         else:
             warmup = self.warmup_updates
             lr_range = self.lr - self.end_lr
-            pct_remaining = 1 - (self._step_count - warmup) / (
-                self.tot_updates - warmup
-            )
+            pct_remaining = 1 - (self._step_count - warmup) / (self.tot_updates - warmup)
             lr = lr_range * pct_remaining ** (self.power) + self.end_lr
 
         return [lr for group in self.optimizer.param_groups]

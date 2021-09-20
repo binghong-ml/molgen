@@ -4,6 +4,7 @@ from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
+from torch.nn.utils.rnn import pad_sequence
 
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
@@ -11,17 +12,15 @@ from neptune.new.integrations.pytorch_lightning import NeptuneLogger
 
 import moses
 
-from model.generator import BaseGenerator
-from model.lr import PolynomialDecayLR
-from data.dataset import ZincDataset, MosesDataset, SimpleMosesDataset, QM9Dataset
-from data.target_data import Data
+from model.smiles_generator import SmilesGenerator
+from data.smiles_dataset import ZincDataset, MosesDataset, SimpleMosesDataset, QM9Dataset, untokenize
 from util import compute_sequence_accuracy, compute_sequence_cross_entropy, canonicalize
 from time import time
 
 
-class BaseGeneratorLightningModule(pl.LightningModule):
+class SmilesGeneratorLightningModule(pl.LightningModule):
     def __init__(self, hparams):
-        super(BaseGeneratorLightningModule, self).__init__()
+        super(SmilesGeneratorLightningModule, self).__init__()
         hparams = argparse.Namespace(**hparams) if isinstance(hparams, dict) else hparams
         self.save_hyperparameters(hparams)
         self.setup_datasets(hparams)
@@ -41,15 +40,12 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         self.train_smiles_set = set(self.train_dataset.smiles_list)
 
     def setup_model(self, hparams):
-        self.model = BaseGenerator(
+        self.model = SmilesGenerator(
             num_layers=hparams.num_layers,
             emb_size=hparams.emb_size,
             nhead=hparams.nhead,
             dim_feedforward=hparams.dim_feedforward,
             dropout=hparams.dropout,
-            disable_loc=hparams.disable_loc,
-            disable_edgelogit=hparams.disable_edgelogit,
-            disable_branchidx=hparams.disable_branchidx,
         )
 
     ### Dataloaders and optimizers
@@ -58,7 +54,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             self.train_dataset,
             batch_size=self.hparams.batch_size,
             shuffle=True,
-            collate_fn=Data.collate,
+            collate_fn=lambda sequences: pad_sequence(sequences, batch_first=True, padding_value=0),
             num_workers=self.hparams.num_workers,
         )
 
@@ -67,7 +63,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             self.val_dataset,
             batch_size=self.hparams.batch_size,
             shuffle=False,
-            collate_fn=Data.collate,
+            collate_fn=lambda sequences: pad_sequence(sequences, batch_first=True, padding_value=0),
             num_workers=self.hparams.num_workers,
         )
 
@@ -75,7 +71,6 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         optimizer = torch.optim.AdamW(
             self.parameters(), 
             lr=self.hparams.lr, 
-            weight_decay=self.hparams.weight_decay
             )
         return [optimizer]
 
@@ -85,9 +80,9 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
         # decoding
         logits = self.model(batched_data)
-        loss = compute_sequence_cross_entropy(logits, batched_data[0], ignore_index=0)
+        loss = compute_sequence_cross_entropy(logits, batched_data, ignore_index=0)
         statistics["loss/total"] = loss
-        statistics["acc/total"] = compute_sequence_accuracy(logits, batched_data[0], ignore_index=0)[0]
+        statistics["acc/total"] = compute_sequence_accuracy(logits, batched_data, ignore_index=0)[0]
 
         return loss, statistics
 
@@ -97,8 +92,6 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         for key, val in statistics.items():
             self.log(f"train/{key}", val, on_step=True, logger=True)
 
-        #self.lr_schedulers().step()
-        #self.log(f"lr", self.lr_schedulers().get_lr())
         return loss
 
     def validation_step(self, batched_data, batch_idx):
@@ -114,21 +107,14 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
         num_samples = self.hparams.num_samples if self.sanity_checked else 256
         max_len = self.hparams.max_len if self.sanity_checked else 10
-        maybe_smiles_list, tokens_list, errors = self.sample(num_samples, max_len)
-
-        for tokens in tokens_list:
-            self.logger.experiment["tokens"].log(f"{self.current_epoch}, {tokens}")
-
-        for error in errors:
-            self.logger.experiment["error"].log(f"{self.current_epoch}, {error}")
-
+        maybe_smiles_list = self.sample(num_samples, max_len)
         smiles_list = []
         for maybe_smiles in maybe_smiles_list:
             self.logger.experiment["maybe_smiles"].log(f"{self.current_epoch}, {maybe_smiles}")
 
             smiles, error = canonicalize(maybe_smiles)
             if smiles is None:
-                self.logger.experiment["invalid_smiles"].log(f"{self.current_epoch}, {maybe_smiles}, {error}")
+                self.logger.experiment["invalid_smiles"].log(f"{self.current_epoch}, {maybe_smiles}")
             else:
                 self.logger.experiment["valid_smiles"].log(f"{self.current_epoch}, {maybe_smiles}")
                 smiles_list.append(smiles)
@@ -144,13 +130,11 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         for key, val in statistics.items():
             self.log(key, val, on_step=False, on_epoch=True, logger=True)
 
+    
     def sample(self, num_samples, max_len, verbose=False):
         offset = 0
         maybe_smiles_list = []
-        tokens_list = []
-        errors = []
         tic = time()
-
         self.to(0)
         while offset < num_samples:
             cur_num_samples = min(num_samples - offset, self.hparams.sample_batch_size)
@@ -158,27 +142,18 @@ class BaseGeneratorLightningModule(pl.LightningModule):
 
             self.model.eval()
             with torch.no_grad():
-                data_list = self.model.decode(cur_num_samples, max_len=max_len, device=self.device)
+                sequences = self.model.decode(cur_num_samples, max_len=max_len, device=self.device)
 
-            for data in data_list:
-                if data.error is None:
-                    try:
-                        smiles = data.to_smiles()
-                        maybe_smiles_list.append(smiles)
-                    except Exception as e:
-                        errors.append(e)
-
-                else:
-                    errors.append(data.error)
-
-            tokens_list += ["".join(data.tokens) for data in data_list]
-
+            maybe_smiles = [untokenize(sequence) for sequence in sequences.tolist()]
+            maybe_smiles_list += maybe_smiles
+                        
             if verbose:
                 elapsed = time() - tic
                 print(f"{len(maybe_smiles_list)} / {num_samples}, elaspsed: {elapsed}")
 
-        return maybe_smiles_list, tokens_list, errors
+        return maybe_smiles_list
 
+    
     @staticmethod
     def add_args(parser):
         parser.add_argument("--dataset_name", type=str, default="zinc")
@@ -200,23 +175,19 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--sample_batch_size", type=int, default=1000)
         parser.add_argument("--test_num_samples", type=int, default=10000)
 
-        parser.add_argument("--disable_loc", action="store_true")
-        parser.add_argument("--disable_edgelogit", action="store_true")
-        parser.add_argument("--disable_branchidx", action="store_true")
-
         return parser
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    BaseGeneratorLightningModule.add_args(parser)
+    SmilesGeneratorLightningModule.add_args(parser)
     parser.add_argument("--max_epochs", type=int, default=100)
     parser.add_argument("--gradient_clip_val", type=float, default=0.5)
     parser.add_argument("--load_checkpoint_path", type=str, default="")
     parser.add_argument("--tag", type=str, default="default")
     hparams = parser.parse_args()
 
-    model = BaseGeneratorLightningModule(hparams)
+    model = SmilesGeneratorLightningModule(hparams)
     if hparams.load_checkpoint_path != "":
         model.load_state_dict(torch.load(hparams.load_checkpoint_path)["state_dict"])
 
