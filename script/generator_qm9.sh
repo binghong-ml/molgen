@@ -1,3 +1,5 @@
 #!/bin/bash
 
-python train_generator.py --dataset_name qm9
+python train_generator.py \
+--disable_valencemask \
+--dataset_name qm9

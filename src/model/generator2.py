@@ -52,7 +52,7 @@ class EdgeLogitLayer(nn.Module):
 
 
 class BaseGenerator(nn.Module):
-    def __init__(self, num_layers, emb_size, nhead, dim_feedforward, dropout, use_valence_mask):
+    def __init__(self, num_layers, emb_size, nhead, dim_feedforward, dropout, disable_treeloc, disable_valencemask):
         super(BaseGenerator, self).__init__()
         self.nhead = nhead
 
@@ -77,7 +77,8 @@ class BaseGenerator(nn.Module):
         self.ring_generator = EdgeLogitLayer(emb_size=emb_size, hidden_dim=emb_size)
 
         #
-        self.use_valence_mask = use_valence_mask
+        self.disable_treeloc = disable_treeloc
+        self.disable_valencemask = disable_valencemask
 
     def forward(self, batched_data):
         (
@@ -100,8 +101,10 @@ class BaseGenerator(nn.Module):
 
         #
         mask = self.linear_loc_embedding_layer(linear_loc_squares)
-        mask += self.up_loc_embedding_layer(up_loc_squares)
-        mask += self.down_loc_embedding_layer(down_loc_squares)
+        if not self.disable_treeloc:
+            mask += self.up_loc_embedding_layer(up_loc_squares)
+            mask += self.down_loc_embedding_layer(down_loc_squares)
+        
         mask = mask.permute(0, 3, 1, 2)
 
         #
@@ -123,7 +126,7 @@ class BaseGenerator(nn.Module):
         logits = torch.cat([logits0, logits1], dim=2)
         logits = logits.masked_fill(graph_mask_sequences, float("-inf"))
         
-        if self.use_valence_mask:
+        if not self.disable_valencemask:
             logits = logits.masked_fill(valence_mask_sequences, float("-inf"))
 
         return logits

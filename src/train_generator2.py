@@ -46,7 +46,8 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             nhead=hparams.nhead,
             dim_feedforward=hparams.dim_feedforward,
             dropout=hparams.dropout,
-            use_valence_mask=hparams.use_valence_mask,
+            disable_treeloc=hparams.disable_treeloc,
+            disable_valencemask=hparams.disable_valencemask,
         )
 
     ### Dataloaders and optimizers
@@ -189,7 +190,8 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--sample_batch_size", type=int, default=1000)
         parser.add_argument("--test_num_samples", type=int, default=10000)
 
-        parser.add_argument("--use_valence_mask", action="store_true")
+        parser.add_argument("--disable_treeloc", action="store_true")
+        parser.add_argument("--disable_valencemask", action="store_true")
 
         return parser
 
