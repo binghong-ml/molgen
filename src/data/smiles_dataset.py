@@ -76,6 +76,7 @@ TOKEN2ID = {token: TOKENS.index(token) for token in TOKENS}
 ID2TOKEN = {idx: TOKENS[idx] for idx in range(len(TOKENS))}
 MAX_LEN = 250
 
+
 @enum.unique
 class TokenType(enum.IntEnum):
     ATOM = 1
@@ -127,15 +128,17 @@ def tokenize(smiles):
     tokens.append("[eos]")
     return [TOKEN2ID[token] for token in tokens]
 
+
 def untokenize(sequence):
     tokens = [ID2TOKEN[id_] for id_ in sequence]
     if tokens[0] != "[bos]":
         return ""
     elif "[eos]" not in tokens:
         return ""
-    
-    tokens = tokens[1:tokens.index("[eos]")]
+
+    tokens = tokens[1 : tokens.index("[eos]")]
     return "".join(tokens)
+
 
 DATA_DIR = "../resource/data"
 
@@ -143,6 +146,7 @@ import os
 from pathlib import Path
 import torch
 from torch.utils.data import Dataset
+
 
 class ZincDataset(Dataset):
     raw_dir = f"{DATA_DIR}/zinc"
@@ -157,14 +161,14 @@ class ZincDataset(Dataset):
 
     def __getitem__(self, idx):
         smiles = self.smiles_list[idx]
-        
+
         mol = Chem.MolFromSmiles(smiles)
         if self.simple:
             Chem.Kekulize(mol)
-            
+
         smiles = Chem.MolToSmiles(mol)
         return torch.LongTensor(tokenize(smiles))
-        
+
 
 class QM9Dataset(ZincDataset):
     raw_dir = f"{DATA_DIR}/qm9"

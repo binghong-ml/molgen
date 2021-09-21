@@ -146,7 +146,7 @@ class SmilesGeneratorLightningModule(pl.LightningModule):
 
             maybe_smiles = [untokenize(sequence) for sequence in sequences.tolist()]
             maybe_smiles_list += maybe_smiles
-                        
+
             if verbose:
                 elapsed = time() - tic
                 print(f"{len(maybe_smiles_list)} / {num_samples}, elaspsed: {elapsed}")
@@ -215,7 +215,12 @@ if __name__ == "__main__":
     smiles_list_path = os.path.join("../resource/checkpoint/", hparams.tag, "test.txt")
     Path(smiles_list_path).write_text("\n".join(smiles_list))
 
-    metrics = moses.get_all_metrics(smiles_list, n_jobs=8, device="cuda:0", test=model.test_dataset.smiles_list)
+    metrics = moses.get_all_metrics(
+        smiles_list, n_jobs=8, 
+        device="cuda:0", 
+        train=model.train_dataset.smiles_list, 
+        test=model.test_dataset.smiles_list,
+        )
     print(metrics)
     for key in metrics:
         neptune_logger.experiment[f"moses_metric/{key}"] = metrics[key]

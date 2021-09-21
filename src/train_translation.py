@@ -18,6 +18,7 @@ from data.source_data import Data as SourceData
 from data.target_data import Data as TargetData
 from util import compute_sequence_cross_entropy, compute_sequence_accuracy, canonicalize
 
+from tqdm import tqdm
 
 class BaseTranslatorLightningModule(pl.LightningModule):
     def __init__(self, hparams):
@@ -146,14 +147,18 @@ class BaseTranslatorLightningModule(pl.LightningModule):
     def test_step(self, batched_data, batch_idx):
         src, src_smiles_list = batched_data
         src_smiles2tgt_smiles_list = defaultdict(list)
-        for _ in range(self.hparams.num_repeats):
+        for _ in tqdm(range(self.hparams.num_repeats)):
             with torch.no_grad():
                 tgt_data_list = self.model.decode(src, max_len=self.hparams.max_len, device=self.device)
 
             for src_smiles, tgt_data in zip(src_smiles_list, tgt_data_list):
-                maybe_smiles = tgt_data.to_smiles()
-                src_smiles2tgt_smiles_list[src_smiles].append(maybe_smiles)
+                try:
+                    maybe_smiles = tgt_data.to_smiles()
+                    src_smiles2tgt_smiles_list[src_smiles].append(maybe_smiles)
+                except:
+                    src_smiles2tgt_smiles_list[src_smiles].append("")
 
+                
         dict_path = os.path.join(self.hparams.checkpoint_dir, "test_pairs.txt")
         for src_smiles in src_smiles_list:
             with Path(dict_path).open("a") as fp:
@@ -190,6 +195,7 @@ if __name__ == "__main__":
     parser.add_argument("--tag", type=str, default="default")
     hparams = parser.parse_args()
 
+    hparams.checkpoint_dir = os.path.join("../resource/checkpoint/", hparams.tag)
     model = BaseTranslatorLightningModule(hparams)
     if hparams.load_checkpoint_path != "":
         model.load_state_dict(torch.load(hparams.load_checkpoint_path)["state_dict"])
@@ -198,7 +204,6 @@ if __name__ == "__main__":
     logger.run["params"] = vars(hparams)
     logger.run["sys/tags"].add(hparams.tag.split("_"))
 
-    hparams.checkpoint_dir = os.path.join("../resource/checkpoint/", hparams.tag)
     checkpoint_callback = ModelCheckpoint(dirpath=hparams.checkpoint_dir, monitor="train/loss/total", mode="min")
     callbacks = [checkpoint_callback]
 
@@ -215,5 +220,6 @@ if __name__ == "__main__":
     if hparams.max_epochs > 0:
         model.load_from_checkpoint(trainer.checkpoint_callback.best_model_path)
 
+    model = model.to(0)
     model.eval()
     trainer.test(model)

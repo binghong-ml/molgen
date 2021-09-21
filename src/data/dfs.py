@@ -23,7 +23,12 @@ def dfs_edges(G, source, randomize_neighbors=False):
                 if child not in visited:
                     yield parent, child
                     visited.add(child)
-                    stack.append((child, iter(G[child])))
+
+                    successors = list(G[child])
+                    if randomize_neighbors:
+                        random.shuffle(successors)
+
+                    stack.append((child, iter(successors)))
 
             except StopIteration:
                 stack.pop()

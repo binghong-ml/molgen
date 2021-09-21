@@ -22,8 +22,11 @@ class TokenEmbedding(nn.Module):
     def forward(self, tokens):
         return self.embedding(tokens.long()) * math.sqrt(self.emb_size)
 
+
 class SmilesGenerator(nn.Module):
-    def __init__(self, num_layers, emb_size, nhead, dim_feedforward, dropout,):
+    def __init__(
+        self, num_layers, emb_size, nhead, dim_feedforward, dropout,
+    ):
         super(SmilesGenerator, self).__init__()
         self.nhead = nhead
 
@@ -51,9 +54,7 @@ class SmilesGenerator(nn.Module):
         out = self.input_dropout(out)
 
         #
-        distance_squares = (
-            torch.abs(torch.arange(sequence_len).unsqueeze(0) - torch.arange(sequence_len).unsqueeze(1))
-        )
+        distance_squares = torch.abs(torch.arange(sequence_len).unsqueeze(0) - torch.arange(sequence_len).unsqueeze(1))
         distance_squares[distance_squares > MAX_LEN] = MAX_LEN
         distance_squares = distance_squares.unsqueeze(0).repeat(batch_size, 1, 1)
         distance_squares = distance_squares.to(out.device)
@@ -67,7 +68,7 @@ class SmilesGenerator(nn.Module):
         mask = mask.reshape(-1, sequence_len, sequence_len)
 
         #
-        key_padding_mask = (sequences == TOKEN2ID[PAD_TOKEN])
+        key_padding_mask = sequences == TOKEN2ID[PAD_TOKEN]
 
         out = out.transpose(0, 1)
         out = self.transformer(out, mask, key_padding_mask)
@@ -75,7 +76,7 @@ class SmilesGenerator(nn.Module):
 
         #
         logits = self.generator(out)
-        
+
         return logits
 
     def decode(self, num_samples, max_len, device):

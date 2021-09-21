@@ -11,10 +11,9 @@ from neptune.new.integrations.pytorch_lightning import NeptuneLogger
 
 import moses
 
-from model.generator import BaseGenerator
-from model.lr import PolynomialDecayLR
-from data.dataset import ZincDataset, MosesDataset, SimpleMosesDataset, QM9Dataset
-from data.target_data import Data
+from model.generator2 import BaseGenerator
+from data.dataset2 import ZincDataset, MosesDataset, SimpleMosesDataset, QM9Dataset
+from data.target_data2 import Data
 from util import compute_sequence_accuracy, compute_sequence_cross_entropy, canonicalize
 from time import time
 
@@ -47,9 +46,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             nhead=hparams.nhead,
             dim_feedforward=hparams.dim_feedforward,
             dropout=hparams.dropout,
-            disable_loc=hparams.disable_loc,
-            disable_edgelogit=hparams.disable_edgelogit,
-            disable_branchidx=hparams.disable_branchidx,
+            use_valence_mask=hparams.use_valence_mask,
         )
 
     ### Dataloaders and optimizers
@@ -96,8 +93,6 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         for key, val in statistics.items():
             self.log(f"train/{key}", val, on_step=True, logger=True)
 
-        #self.lr_schedulers().step()
-        #self.log(f"lr", self.lr_schedulers().get_lr())
         return loss
 
     def validation_step(self, batched_data, batch_idx):
@@ -111,27 +106,23 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         if (self.current_epoch + 1) % self.hparams.check_sample_every_n_epoch != 0:
             return
 
-        num_samples = self.hparams.num_samples if self.sanity_checked else 256
+        num_samples = self.hparams.num_samples if self.sanity_checked else 1024
         max_len = self.hparams.max_len if self.sanity_checked else 10
         maybe_smiles_list, tokens_list, errors = self.sample(num_samples, max_len)
 
-        for tokens in tokens_list:
-            self.logger.experiment["tokens"].log(f"{self.current_epoch}, {tokens}")
-
-        for error in errors:
-            self.logger.experiment["error"].log(f"{self.current_epoch}, {error}")
-
         smiles_list = []
-        for maybe_smiles in maybe_smiles_list:
-            self.logger.experiment["maybe_smiles"].log(f"{self.current_epoch}, {maybe_smiles}")
-
-            smiles, error = canonicalize(maybe_smiles)
+        for maybe_smiles, tokens, error in zip(maybe_smiles_list, tokens_list, errors):
+            smiles, _ = canonicalize(maybe_smiles)
             if smiles is None:
-                self.logger.experiment["invalid_smiles"].log(f"{self.current_epoch}, {maybe_smiles}, {error}")
+                self.logger.experiment["invalid/maybe_smiles"].log(f"{self.current_epoch}, {maybe_smiles}")
+                self.logger.experiment["invalid/tokens"].log(f"{self.current_epoch}, {tokens}")
+                self.logger.experiment["invalid/error"].log(f"{self.current_epoch}, {error}")
             else:
-                self.logger.experiment["valid_smiles"].log(f"{self.current_epoch}, {maybe_smiles}")
                 smiles_list.append(smiles)
-
+                self.logger.experiment["valid/maybe_smiles"].log(f"{self.current_epoch}, {maybe_smiles}")
+                self.logger.experiment["valid/tokens"].log(f"{self.current_epoch}, {tokens}")
+                self.logger.experiment["valid/error"].log(f"{self.current_epoch}, {error}")
+                
         unique_smiles_set = set(smiles_list)
         novel_smiles_set = unique_smiles_set - self.train_smiles_set
 
@@ -150,7 +141,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         errors = []
         tic = time()
 
-        self.to(0)
+        #self.to(0)
         while offset < num_samples:
             cur_num_samples = min(num_samples - offset, self.hparams.sample_batch_size)
             offset += cur_num_samples
@@ -159,19 +150,18 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             with torch.no_grad():
                 data_list = self.model.decode(cur_num_samples, max_len=max_len, device=self.device)
 
+            tokens_list += ["".join(data.tokens) for data in data_list]
+            errors += [data.error for data in data_list]
+            
             for data in data_list:
                 if data.error is None:
-                    try:
-                        smiles = data.to_smiles()
-                        maybe_smiles_list.append(smiles)
-                    except Exception as e:
-                        errors.append(e)
-
+                    smiles = data.to_smiles()
+                    maybe_smiles_list.append(smiles)
                 else:
-                    errors.append(data.error)
+                    maybe_smiles_list.append(None)
 
-            tokens_list += ["".join(data.tokens) for data in data_list]
-
+                errors.append(data.error)
+            
             if verbose:
                 elapsed = time() - tic
                 print(f"{len(maybe_smiles_list)} / {num_samples}, elaspsed: {elapsed}")
@@ -199,9 +189,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--sample_batch_size", type=int, default=1000)
         parser.add_argument("--test_num_samples", type=int, default=10000)
 
-        parser.add_argument("--disable_loc", action="store_true")
-        parser.add_argument("--disable_edgelogit", action="store_true")
-        parser.add_argument("--disable_branchidx", action="store_true")
+        parser.add_argument("--use_valence_mask", action="store_true")
 
         return parser
 
