@@ -322,7 +322,7 @@ class Data:
         return smiles
 
     @staticmethod
-    def from_smiles(smiles, randomize=False):
+    def from_smiles(smiles, randomize):
         molgraph = smiles2molgraph(smiles)
         atom_tokens = nx.get_node_attributes(molgraph, "token")
         bond_tokens = nx.get_edge_attributes(molgraph, "token")
@@ -414,10 +414,10 @@ class Data:
         sequence_len = len(self.sequence)
         sequence = torch.LongTensor(np.array(self.sequence))
         
-        ring_start_mask = (sequence == get_id(RING_START_TOKEN))
-        count_sequence = ring_start_mask.long().cumsum(dim=0)
-        count_sequence = count_sequence.masked_fill(ring_start_mask, 0)
-
+        mask = (sequence == get_id(RING_START_TOKEN))
+        count_sequence = mask.long().cumsum(dim=0)
+        count_sequence = count_sequence.masked_fill(mask, 0)
+            
         graph_mask_sequence = torch.tensor(np.array(self.graph_mask_traj), dtype=torch.bool)
         valency_mask_sequence = torch.tensor(np.array(self.valence_mask_traj), dtype=torch.bool)
 

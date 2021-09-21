@@ -34,9 +34,9 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             "simplemoses": SimpleMosesDataset,
             "qm9": QM9Dataset,
         }.get(hparams.dataset_name)
-        self.train_dataset = dataset_cls("train")
-        self.val_dataset = dataset_cls("valid")
-        self.test_dataset = dataset_cls("test")
+        self.train_dataset = dataset_cls("train", randomize=hparams.randomize)
+        self.val_dataset = dataset_cls("valid", randomize=hparams.randomize)
+        self.test_dataset = dataset_cls("test", randomize=hparams.randomize)
         self.train_smiles_set = set(self.train_dataset.smiles_list)
 
     def setup_model(self, hparams):
@@ -190,6 +190,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--sample_batch_size", type=int, default=1000)
         parser.add_argument("--test_num_samples", type=int, default=10000)
 
+        parser.add_argument("--randomize", action="store_true")
         parser.add_argument("--disable_treeloc", action="store_true")
         parser.add_argument("--disable_valencemask", action="store_true")
 
