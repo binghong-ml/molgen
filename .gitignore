@@ -129,12 +129,13 @@ dmypy.json
 .pyre/
 
 # Resource folder
-resource/
+resource/checkpoint/
+!resource/checkpoint/.gitkeep
+resource/log/
+!resource/log/.gitkeep
 
 # vscode
 .vscode
 
 # neptune
 .neptune
-
-resource/
