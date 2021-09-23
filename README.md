@@ -23,3 +23,22 @@ pip install cython
 pip install molsets
 
 ```
+
+## 2. Executing the scripts
+You can execute the scripts in the following order.
+
+```
+generator_moses_hparam0.sh
+generator_moses_hparam1.sh
+generator_moses_hparam2.sh
+generator_moses_hparam3.sh
+generator_moses_hparam4.sh
+generator_moses_hparam5.sh
+generator_zinc_hparam0.sh
+generator_zinc_hparam1.sh
+generator_qm9_hparam0.sh
+generator_qm9_hparam1.sh
+smiles_generator_moses.sh
+smiles_generator_zinc.sh
+smiles_generator_qm9.sh
+```
