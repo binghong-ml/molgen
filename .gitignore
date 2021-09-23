@@ -130,9 +130,9 @@ dmypy.json
 
 # Resource folder
 resource/checkpoint/
-!resource/checkpoint/.gitkeep
+!./resource/checkpoint/.gitkeep
 resource/log/
-!resource/log/.gitkeep
+!./resource/log/.gitkeep
 
 # vscode
 .vscode
