@@ -210,7 +210,7 @@ if __name__ == "__main__":
     model = model.to(0)
     model.eval()
     with torch.no_grad():
-        smiles_list, _, _ = model.sample(hparams.test_num_samples, hparams.max_len, verbose=True)
+        smiles_list = model.sample(hparams.test_num_samples, hparams.max_len, verbose=True)
 
     smiles_list_path = os.path.join("../resource/checkpoint/", hparams.tag, "test.txt")
     Path(smiles_list_path).write_text("\n".join(smiles_list))

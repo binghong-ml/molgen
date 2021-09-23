@@ -1,3 +1,4 @@
+from model.lr import PolynomialDecayLR
 import os
 import argparse
 from pathlib import Path
@@ -74,7 +75,17 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             self.parameters(), 
             lr=self.hparams.lr, 
             )
-        return [optimizer]
+        
+        scheduler = PolynomialDecayLR(
+            optimizer=optimizer,
+            warmup_updates= self.hparams.warmup_updates, 
+            tot_updates= self.hparams.tot_updates, 
+            lr=self.hparams.lr,
+            end_lr=self.hparams.end_lr, 
+            power=1
+        )
+        
+        return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "step", "frequency": 1}}
 
     ### Main steps
     def shared_step(self, batched_data):
@@ -180,7 +191,13 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--dropout", type=int, default=0.1)
         parser.add_argument("--logit_hidden_dim", type=int, default=256)
 
-        parser.add_argument("--lr", type=float, default=1e-4)
+        #parser.add_argument("--lr", type=float, default=1e-4)
+        parser.add_argument("--lr", type=float, default=1e-3)
+        parser.add_argument("--end_lr", type=float, default=1e-9)
+        parser.add_argument("--tot_updates", type=int, default=500000)
+        parser.add_argument("--warmup_updates", type=int, default=10000)
+
+
         parser.add_argument("--batch_size", type=int, default=128)
         parser.add_argument("--num_workers", type=int, default=8)
 
@@ -217,12 +234,13 @@ if __name__ == "__main__":
     checkpoint_callback = ModelCheckpoint(
         dirpath=os.path.join("../resource/checkpoint/", hparams.tag), monitor="validation/loss/total", mode="min",
     )
+    lr_monitor = LearningRateMonitor(logging_interval='step')
     trainer = pl.Trainer(
         gpus=1,
         logger=neptune_logger,
         default_root_dir="../resource/log/",
         max_epochs=hparams.max_epochs,
-        callbacks=[checkpoint_callback],
+        callbacks=[checkpoint_callback, lr_monitor],
         gradient_clip_val=hparams.gradient_clip_val,
         resume_from_checkpoint=hparams.resume_from_checkpoint_path,
     )
@@ -232,7 +250,8 @@ if __name__ == "__main__":
     model.eval()
     with torch.no_grad():
         smiles_list, _, _ = model.sample(hparams.test_num_samples, hparams.max_len, verbose=True)
-
+    
+    smiles_list = [smiles for smiles in smiles_list if smiles is not None]
     smiles_list_path = os.path.join("../resource/checkpoint/", hparams.tag, "test.txt")
     Path(smiles_list_path).write_text("\n".join(smiles_list))
 

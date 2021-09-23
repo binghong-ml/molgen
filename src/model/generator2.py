@@ -9,6 +9,7 @@ from tqdm import tqdm
 from joblib import Parallel, delayed
 
 from data.target_data2 import PAD_TOKEN, TOKENS, RING_START_TOKEN, RING_END_TOKENS, MAX_LEN, Data, get_id
+from model.lr import PolynomialDecayLR
 
 from time import time
 
