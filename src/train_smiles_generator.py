@@ -36,6 +36,7 @@ class SmilesGeneratorLightningModule(BaseGeneratorLightningModule):
             emb_size=hparams.emb_size,
             nhead=hparams.nhead,
             dim_feedforward=hparams.dim_feedforward,
+            input_dropout=hparams.input_dropout,
             dropout=hparams.dropout,
         )
 
@@ -94,18 +95,19 @@ class SmilesGeneratorLightningModule(BaseGeneratorLightningModule):
         #
         parser.add_argument("--dataset_name", type=str, default="zinc")
         parser.add_argument("--batch_size", type=int, default=128)
-        parser.add_argument("--num_workers", type=int, default=8)
+        parser.add_argument("--num_workers", type=int, default=6)
 
         #
         parser.add_argument("--num_layers", type=int, default=3)
         parser.add_argument("--emb_size", type=int, default=1024)
         parser.add_argument("--nhead", type=int, default=8)
         parser.add_argument("--dim_feedforward", type=int, default=2048)
+        parser.add_argument("--input_dropout", type=int, default=0.1)
         parser.add_argument("--dropout", type=int, default=0.1)
         parser.add_argument("--logit_hidden_dim", type=int, default=256)
 
         #
-        parser.add_argument("--lr", type=float, default=1e-4)
+        parser.add_argument("--lr", type=float, default=2e-4)
         
         #
         parser.add_argument("--max_len", type=int, default=250)

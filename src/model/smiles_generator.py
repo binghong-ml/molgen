@@ -25,14 +25,14 @@ class TokenEmbedding(nn.Module):
 
 class SmilesGenerator(nn.Module):
     def __init__(
-        self, num_layers, emb_size, nhead, dim_feedforward, dropout,
+        self, num_layers, emb_size, nhead, dim_feedforward, input_dropout, dropout,
     ):
         super(SmilesGenerator, self).__init__()
         self.nhead = nhead
 
         #
         self.token_embedding_layer = TokenEmbedding(len(TOKENS), emb_size)
-        self.input_dropout = nn.Dropout(dropout)
+        self.input_dropout = nn.Dropout(input_dropout)
 
         #
         self.distance_embedding_layer = nn.Embedding(MAX_LEN + 1, nhead)

@@ -44,6 +44,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             emb_size=hparams.emb_size,
             nhead=hparams.nhead,
             dim_feedforward=hparams.dim_feedforward,
+            input_dropout=hparams.input_dropout,
             dropout=hparams.dropout,
             disable_treeloc=hparams.disable_treeloc,
             disable_valencemask=hparams.disable_valencemask,
@@ -164,14 +165,15 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         #
         parser.add_argument("--dataset_name", type=str, default="zinc")
         parser.add_argument("--batch_size", type=int, default=128)
-        parser.add_argument("--num_workers", type=int, default=8)
+        parser.add_argument("--num_workers", type=int, default=6)
 
         #
         parser.add_argument("--num_layers", type=int, default=3)
         parser.add_argument("--emb_size", type=int, default=1024)
         parser.add_argument("--nhead", type=int, default=8)
         parser.add_argument("--dim_feedforward", type=int, default=2048)
-        parser.add_argument("--dropout", type=int, default=0.1)
+        parser.add_argument("--input_dropout", type=float, default=0.0)
+        parser.add_argument("--dropout", type=float, default=0.1)
         parser.add_argument("--logit_hidden_dim", type=int, default=256)
         
         #
@@ -180,11 +182,11 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         parser.add_argument("--disable_valencemask", action="store_true")
         
         #
-        parser.add_argument("--lr", type=float, default=1e-4)
+        parser.add_argument("--lr", type=float, default=2e-4)
 
         #
         parser.add_argument("--max_len", type=int, default=250)
-        parser.add_argument("--check_sample_every_n_epoch", type=int, default=10)
+        parser.add_argument("--check_sample_every_n_epoch", type=int, default=5)
         parser.add_argument("--num_samples", type=int, default=10000)
         parser.add_argument("--sample_batch_size", type=int, default=1000)
         parser.add_argument("--eval_moses", action="store_true")

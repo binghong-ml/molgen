@@ -11,14 +11,13 @@ conda install -y -c conda-forge neptune-client
 conda install -y -c conda-forge rdkit
 
 pip install pytorch-lightning
+pip install neptune-client[pytorch-lightning]
 
 pip install torch-scatter -f https://pytorch-geometric.com/whl/torch-1.8.1+cu111.html
 pip install torch-sparse -f https://pytorch-geometric.com/whl/torch-1.8.1+cu111.html
 pip install torch-cluster -f https://pytorch-geometric.com/whl/torch-1.8.1+cu111.html
 pip install torch-spline-conv -f https://pytorch-geometric.com/whl/torch-1.8.1+cu111.html
 pip install torch-geometric
-
-pip install neptune-client[pytorch-lightning]
 
 pip install cython
 pip install molsets
