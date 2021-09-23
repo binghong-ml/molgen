@@ -5,6 +5,8 @@ You can set up the environment by following commands. You need to specify cudato
 
 ```
 conda create -n mol python=3.7
+source ~/.bashrc
+conda activate mol
 conda install -y pytorch cudatoolkit=10.1 -c pytorch
 conda install -y tqdm
 conda install -y -c conda-forge neptune-client
@@ -28,13 +30,14 @@ pip install molsets
 You can execute the scripts in the following order.
 
 ```
-CUDA_VISIBLE_DEVICES=${GPU} bash generator_moses_hparam0.sh
-CUDA_VISIBLE_DEVICES=${GPU} bash generator_moses_hparam1.sh
-CUDA_VISIBLE_DEVICES=${GPU} bash generator_moses_hparam2.sh
-CUDA_VISIBLE_DEVICES=${GPU} bash generator_moses_hparam3.sh
-CUDA_VISIBLE_DEVICES=${GPU} bash generator_moses_hparam4.sh
-CUDA_VISIBLE_DEVICES=${GPU} bash generator_moses_hparam5.sh
-CUDA_VISIBLE_DEVICES=${GPU} bash generator_zinc_hparam0.sh
+cd molgen/src/
+CUDA_VISIBLE_DEVICES=${GPU} bash ../script/generator_moses_hparam0.sh
+CUDA_VISIBLE_DEVICES=${GPU} bash ../script/generator_moses_hparam1.sh
+CUDA_VISIBLE_DEVICES=${GPU} bash ../script/generator_moses_hparam2.sh
+CUDA_VISIBLE_DEVICES=${GPU} bash ../script/generator_moses_hparam3.sh
+CUDA_VISIBLE_DEVICES=${GPU} bash ../script/generator_moses_hparam4.sh
+CUDA_VISIBLE_DEVICES=${GPU} bash ../script/generator_moses_hparam5.sh
+CUDA_VISIBLE_DEVICES=${GPU} bash ../script/generator_zinc_hparam0.sh
 CUDA_VISIBLE_DEVICES=${GPU} bash generator_zinc_hparam1.sh
 CUDA_VISIBLE_DEVICES=${GPU} bash generator_qm9_hparam0.sh
 CUDA_VISIBLE_DEVICES=${GPU} bash generator_qm9_hparam1.sh
