@@ -1,3 +1,4 @@
+from model.lr import PolynomialDecayLR
 import os
 import argparse
 from pathlib import Path
@@ -10,14 +11,12 @@ from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from neptune.new.integrations.pytorch_lightning import NeptuneLogger
 
 import moses
+from moses.utils import disable_rdkit_log, enable_rdkit_log
 
 from model.generator import BaseGenerator
-from model.lr import PolynomialDecayLR
 from data.dataset import ZincDataset, MosesDataset, SimpleMosesDataset, QM9Dataset
 from data.target_data import Data
 from util import compute_sequence_accuracy, compute_sequence_cross_entropy, canonicalize
-from time import time
-
 
 class BaseGeneratorLightningModule(pl.LightningModule):
     def __init__(self, hparams):
@@ -26,8 +25,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         self.save_hyperparameters(hparams)
         self.setup_datasets(hparams)
         self.setup_model(hparams)
-        self.sanity_checked = False
-
+        
     def setup_datasets(self, hparams):
         dataset_cls = {
             "zinc": ZincDataset,
@@ -35,9 +33,9 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             "simplemoses": SimpleMosesDataset,
             "qm9": QM9Dataset,
         }.get(hparams.dataset_name)
-        self.train_dataset = dataset_cls("train")
-        self.val_dataset = dataset_cls("valid")
-        self.test_dataset = dataset_cls("test")
+        self.train_dataset = dataset_cls("train", randomize=hparams.randomize)
+        self.val_dataset = dataset_cls("valid", randomize=hparams.randomize)
+        self.test_dataset = dataset_cls("test", randomize=hparams.randomize)
         self.train_smiles_set = set(self.train_dataset.smiles_list)
 
     def setup_model(self, hparams):
@@ -47,9 +45,8 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             nhead=hparams.nhead,
             dim_feedforward=hparams.dim_feedforward,
             dropout=hparams.dropout,
-            disable_loc=hparams.disable_loc,
-            disable_edgelogit=hparams.disable_edgelogit,
-            disable_branchidx=hparams.disable_branchidx,
+            disable_treeloc=hparams.disable_treeloc,
+            disable_valencemask=hparams.disable_valencemask,
         )
 
     ### Dataloaders and optimizers
@@ -76,6 +73,7 @@ class BaseGeneratorLightningModule(pl.LightningModule):
             self.parameters(), 
             lr=self.hparams.lr, 
             )
+        
         return [optimizer]
 
     ### Main steps
@@ -91,13 +89,10 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         return loss, statistics
 
     def training_step(self, batched_data, batch_idx):
-        self.sanity_checked = True
         loss, statistics = self.shared_step(batched_data)
         for key, val in statistics.items():
             self.log(f"train/{key}", val, on_step=True, logger=True)
 
-        #self.lr_schedulers().step()
-        #self.log(f"lr", self.lr_schedulers().get_lr())
         return loss
 
     def validation_step(self, batched_data, batch_idx):
@@ -108,100 +103,91 @@ class BaseGeneratorLightningModule(pl.LightningModule):
         return loss
 
     def validation_epoch_end(self, outputs):
-        if (self.current_epoch + 1) % self.hparams.check_sample_every_n_epoch != 0:
-            return
+        if (self.current_epoch + 1) % self.hparams.check_sample_every_n_epoch == 0:
+            self.check_samples()
 
-        num_samples = self.hparams.num_samples if self.sanity_checked else 256
-        max_len = self.hparams.max_len if self.sanity_checked else 10
-        maybe_smiles_list, tokens_list, errors = self.sample(num_samples, max_len)
+    def check_samples(self):
+        num_samples = self.hparams.num_samples if not self.trainer.sanity_checking else 2
+        smiles_list, results = self.sample(num_samples)
 
-        for tokens in tokens_list:
-            self.logger.experiment["tokens"].log(f"{self.current_epoch}, {tokens}")
+        #
+        if not self.trainer.sanity_checking:
+            for (smiles, result) in zip(smiles_list, results):
+                self.logger.experiment[f"sample/smiles/{self.current_epoch:03d}"].log(smiles)
+                self.logger.experiment[f"sample/result/{self.current_epoch:03d}"].log(result)
 
-        for error in errors:
-            self.logger.experiment["error"].log(f"{self.current_epoch}, {error}")
-
-        smiles_list = []
-        for maybe_smiles in maybe_smiles_list:
-            self.logger.experiment["maybe_smiles"].log(f"{self.current_epoch}, {maybe_smiles}")
-
-            smiles, error = canonicalize(maybe_smiles)
-            if smiles is None:
-                self.logger.experiment["invalid_smiles"].log(f"{self.current_epoch}, {maybe_smiles}, {error}")
-            else:
-                self.logger.experiment["valid_smiles"].log(f"{self.current_epoch}, {maybe_smiles}")
-                smiles_list.append(smiles)
-
-        unique_smiles_set = set(smiles_list)
+        #
+        valid_smiles_list = [smiles for smiles in smiles_list if smiles is not None]
+        unique_smiles_set = set(valid_smiles_list)
         novel_smiles_set = unique_smiles_set - self.train_smiles_set
-
         statistics = dict()
-        statistics["sample/valid"] = float(len(smiles_list)) / num_samples
-        statistics["sample/unique"] = float(len(unique_smiles_set)) / num_samples
-        statistics["sample/novel"] = float(len(novel_smiles_set)) / num_samples
+        statistics["sample/valid"] = float(len(valid_smiles_list)) / num_samples
+        statistics["sample/unique"] = float(len(unique_smiles_set)) / len(valid_smiles_list)
+        statistics["sample/novel"] = float(len(novel_smiles_set)) / len(valid_smiles_list)
 
+        #
         for key, val in statistics.items():
             self.log(key, val, on_step=False, on_epoch=True, logger=True)
+        
+        if self.hparams.eval_moses and len(valid_smiles_list) > 0:
+            moses_statistics = moses.get_all_metrics(
+                smiles_list, 
+                n_jobs=self.hparams.num_workers, 
+                device=str(self.device), 
+                train=self.train_dataset.smiles_list, 
+                test=self.test_dataset.smiles_list,
+            )
+            for key in moses_statistics:
+                self.log(f"sample/moses/{key}", moses_statistics[key])
 
-    def sample(self, num_samples, max_len, verbose=False):
+    def sample(self, num_samples):
         offset = 0
-        maybe_smiles_list = []
-        tokens_list = []
-        errors = []
-        tic = time()
-
-        self.to(0)
+        results = []
         while offset < num_samples:
             cur_num_samples = min(num_samples - offset, self.hparams.sample_batch_size)
             offset += cur_num_samples
 
             self.model.eval()
             with torch.no_grad():
-                data_list = self.model.decode(cur_num_samples, max_len=max_len, device=self.device)
+                data_list = self.model.decode(cur_num_samples, max_len=self.hparams.max_len, device=self.device)
 
-            for data in data_list:
-                if data.error is None:
-                    try:
-                        smiles = data.to_smiles()
-                        maybe_smiles_list.append(smiles)
-                    except Exception as e:
-                        errors.append(e)
+            results.extend((data.to_smiles(), "".join(data.tokens), data.error) for data in data_list)
+        
+        disable_rdkit_log()
+        smiles_list = [canonicalize(elem[0]) for elem in results]
+        enable_rdkit_log()
 
-                else:
-                    errors.append(data.error)
-
-            tokens_list += ["".join(data.tokens) for data in data_list]
-
-            if verbose:
-                elapsed = time() - tic
-                print(f"{len(maybe_smiles_list)} / {num_samples}, elaspsed: {elapsed}")
-
-        return maybe_smiles_list, tokens_list, errors
+        return smiles_list, results
 
     @staticmethod
     def add_args(parser):
+        #
         parser.add_argument("--dataset_name", type=str, default="zinc")
+        parser.add_argument("--batch_size", type=int, default=128)
+        parser.add_argument("--num_workers", type=int, default=8)
 
+        #
         parser.add_argument("--num_layers", type=int, default=3)
         parser.add_argument("--emb_size", type=int, default=1024)
         parser.add_argument("--nhead", type=int, default=8)
         parser.add_argument("--dim_feedforward", type=int, default=2048)
         parser.add_argument("--dropout", type=int, default=0.1)
         parser.add_argument("--logit_hidden_dim", type=int, default=256)
-
+        
+        #
+        parser.add_argument("--randomize", action="store_true")
+        parser.add_argument("--disable_treeloc", action="store_true")
+        parser.add_argument("--disable_valencemask", action="store_true")
+        
+        #
         parser.add_argument("--lr", type=float, default=1e-4)
-        parser.add_argument("--batch_size", type=int, default=128)
-        parser.add_argument("--num_workers", type=int, default=8)
 
+        #
         parser.add_argument("--max_len", type=int, default=250)
-        parser.add_argument("--check_sample_every_n_epoch", type=int, default=1)
-        parser.add_argument("--num_samples", type=int, default=128)
+        parser.add_argument("--check_sample_every_n_epoch", type=int, default=10)
+        parser.add_argument("--num_samples", type=int, default=10000)
         parser.add_argument("--sample_batch_size", type=int, default=1000)
-        parser.add_argument("--test_num_samples", type=int, default=10000)
-
-        parser.add_argument("--disable_loc", action="store_true")
-        parser.add_argument("--disable_edgelogit", action="store_true")
-        parser.add_argument("--disable_branchidx", action="store_true")
+        parser.add_argument("--eval_moses", action="store_true")
 
         return parser
 
@@ -210,7 +196,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     BaseGeneratorLightningModule.add_args(parser)
     parser.add_argument("--max_epochs", type=int, default=100)
-    parser.add_argument("--gradient_clip_val", type=float, default=0.5)
+    parser.add_argument("--gradient_clip_val", type=float, default=1.0)
     parser.add_argument("--load_checkpoint_path", type=str, default="")
     parser.add_argument("--resume_from_checkpoint_path", type=str, default=None)
     parser.add_argument("--tag", type=str, default="default")
@@ -220,7 +206,12 @@ if __name__ == "__main__":
     if hparams.load_checkpoint_path != "":
         model.load_state_dict(torch.load(hparams.load_checkpoint_path)["state_dict"])
 
-    neptune_logger = NeptuneLogger(project="sungsahn0215/molgen", close_after_fit=False, source_files="**/*.py")
+    neptune_logger = NeptuneLogger(
+        api_key="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsIm"
+        "FwaV9rZXkiOiIyNjdkMDIxZi1lZDkwLTQ0ZDAtODg5Yi03ZTdjNThhYTdjMmQifQ==",
+        project="sungsahn0215/molgen",
+        source_files="**/*.py"
+        )
     neptune_logger.run["params"] = vars(hparams)
     neptune_logger.run["sys/tags"].add(hparams.tag.split("_"))
     checkpoint_callback = ModelCheckpoint(
@@ -236,21 +227,3 @@ if __name__ == "__main__":
         resume_from_checkpoint=hparams.resume_from_checkpoint_path,
     )
     trainer.fit(model)
-
-    model = model.to(0)
-    model.eval()
-    with torch.no_grad():
-        smiles_list, _, _ = model.sample(hparams.test_num_samples, hparams.max_len, verbose=True)
-
-    smiles_list_path = os.path.join("../resource/checkpoint/", hparams.tag, "test.txt")
-    Path(smiles_list_path).write_text("\n".join(smiles_list))
-
-    metrics = moses.get_all_metrics(
-        smiles_list, n_jobs=8, 
-        device="cuda:0", 
-        train=model.train_dataset.smiles_list, 
-        test=model.test_dataset.smiles_list,
-        )
-    print(metrics)
-    for key in metrics:
-        neptune_logger.experiment[f"moses_metric/{key}"] = metrics[key]

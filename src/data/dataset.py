@@ -11,16 +11,17 @@ class ZincDataset(Dataset):
     raw_dir = f"{DATA_DIR}/zinc"
     simple = True
 
-    def __init__(self, split):
+    def __init__(self, split, randomize):
         smiles_list_path = os.path.join(self.raw_dir, f"{split}.txt")
         self.smiles_list = Path(smiles_list_path).read_text(encoding="utf=8").splitlines()
+        self.randomize = randomize
 
     def __len__(self):
         return len(self.smiles_list)
 
     def __getitem__(self, idx):
         smiles = self.smiles_list[idx]
-        return TargetData.from_smiles(smiles, simple=self.simple).featurize()
+        return TargetData.from_smiles(smiles, randomize=self.randomize).featurize()
 
 
 class QM9Dataset(ZincDataset):

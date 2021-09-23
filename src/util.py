@@ -1,7 +1,5 @@
 from rdkit import Chem, RDLogger
 
-RDLogger.logger().setLevel(RDLogger.CRITICAL)
-
 import torch
 import torch.nn.functional as F
 
@@ -28,18 +26,22 @@ def compute_sequence_cross_entropy(logits, batched_sequence_data, ignore_index=0
     return loss
 
 
+
 def canonicalize(smiles):
     try:
         mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            return None
+
         smiles = Chem.MolToSmiles(mol)
-    except Exception as e:
-        return None, str(e)
+    except:
+        return None   
+
 
     if len(smiles) == 0:
-        return None, "zero length smiles"
+        return None
 
-    return smiles, None
-
+    return smiles
 
 def pad_square(squares, padding_value=0):
     max_dim = max([square.size(0) for square in squares])

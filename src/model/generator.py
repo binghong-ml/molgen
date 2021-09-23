@@ -8,7 +8,8 @@ import math
 from tqdm import tqdm
 from joblib import Parallel, delayed
 
-from data.target_data import PAD_TOKEN, TOKENS, RING_ID_START, RING_ID_END, MAX_LEN, Data, get_id
+from data.target_data import PAD_TOKEN, TOKENS, RING_START_TOKEN, RING_END_TOKENS, MAX_LEN, Data, get_id
+from model.lr import PolynomialDecayLR
 
 from time import time
 
@@ -38,41 +39,34 @@ class EdgeLogitLayer(nn.Module):
 
         out1_ = self.linear1(x).view(batch_size, seq_len, self.hidden_dim)
 
-        index_ = sequences.masked_fill((sequences < RING_ID_START) | (sequences > RING_ID_END - 1), RING_ID_START - 1)
-        index_ = index_ - RING_ID_START + 1
-
-        out1 = torch.zeros(batch_size, RING_ID_END - RING_ID_START + 1, self.hidden_dim).to(out1_.device)
+        ring_start_mask = (sequences == get_id(RING_START_TOKEN))
+        index_ = ring_start_mask.long().cumsum(dim=1)
+        index_ = index_.masked_fill(~ring_start_mask, 0)
+        
+        out1 = torch.zeros(batch_size, len(RING_END_TOKENS) + 1, self.hidden_dim).to(out1_.device)
         out1.scatter_(dim=1, index=index_.unsqueeze(-1).repeat(1, 1, self.hidden_dim), src=out1_)
         out1 = out1[:, 1:]
         out1 = out1.permute(0, 2, 1)
         logits = self.scale * torch.bmm(out0, out1)
+
         return logits
 
 
 class BaseGenerator(nn.Module):
-    def __init__(
-        self, num_layers, emb_size, nhead, dim_feedforward, dropout, disable_loc, disable_edgelogit, disable_branchidx,
-    ):
+    def __init__(self, num_layers, emb_size, nhead, dim_feedforward, dropout, disable_treeloc, disable_valencemask):
         super(BaseGenerator, self).__init__()
         self.nhead = nhead
 
         #
         self.token_embedding_layer = TokenEmbedding(len(TOKENS), emb_size)
-        self.disable_branchidx = disable_branchidx
-        if not self.disable_branchidx:
-            self.branch_embedding_layer = TokenEmbedding(MAX_LEN, emb_size)
-
+        self.count_embedding_layer = TokenEmbedding(MAX_LEN, emb_size)
         #
         self.input_dropout = nn.Dropout(dropout)
 
         #
-        self.distance_embedding_layer = nn.Embedding(MAX_LEN + 1, nhead)
-
-        self.disable_loc = disable_loc
-        if not self.disable_loc:
-            self.up_loc_embedding_layer = nn.Embedding(MAX_LEN + 1, nhead)
-            self.down_loc_embedding_layer = nn.Embedding(MAX_LEN + 1, nhead)
-            self.right_loc_embedding_layer = nn.Embedding(MAX_LEN + 1, nhead)
+        self.linear_loc_embedding_layer = nn.Embedding(MAX_LEN + 1, nhead)
+        self.up_loc_embedding_layer = nn.Embedding(MAX_LEN + 1, nhead)
+        self.down_loc_embedding_layer = nn.Embedding(MAX_LEN + 1, nhead)
 
         #
         encoder_layer = nn.TransformerEncoderLayer(emb_size, nhead, dim_feedforward, dropout, "gelu")
@@ -80,40 +74,38 @@ class BaseGenerator(nn.Module):
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers, encoder_norm)
 
         #
-        self.disable_edgelogit = disable_edgelogit
-        if self.disable_edgelogit:
-            self.generator = nn.Linear(emb_size, len(TOKENS))
-        else:
-            self.generator = nn.Linear(emb_size, len(TOKENS) - (RING_ID_END - RING_ID_START))
-            self.ring_generator = EdgeLogitLayer(emb_size=emb_size, hidden_dim=emb_size)
+        self.generator = nn.Linear(emb_size, len(TOKENS) - len(RING_END_TOKENS))
+        self.ring_generator = EdgeLogitLayer(emb_size=emb_size, hidden_dim=emb_size)
+
+        #
+        self.disable_treeloc = disable_treeloc
+        self.disable_valencemask = disable_valencemask
 
     def forward(self, batched_data):
         (
             sequences,
-            branch_sequences,
-            distance_squares,
+            count_sequences, 
+            graph_mask_sequences,
+            valence_mask_sequences,
+            linear_loc_squares,
             up_loc_squares,
             down_loc_squares,
-            right_loc_squares,
-            pred_masks,
         ) = batched_data
         batch_size = sequences.size(0)
         sequence_len = sequences.size(1)
 
         #
         out = self.token_embedding_layer(sequences)
-        if not self.disable_branchidx:
-            out += self.branch_embedding_layer(branch_sequences)
+        out += self.count_embedding_layer(count_sequences)
 
         out = self.input_dropout(out)
 
         #
-        mask = self.distance_embedding_layer(distance_squares)
-        if not self.disable_loc:
+        mask = self.linear_loc_embedding_layer(linear_loc_squares)
+        if not self.disable_treeloc:
             mask += self.up_loc_embedding_layer(up_loc_squares)
             mask += self.down_loc_embedding_layer(down_loc_squares)
-            mask += self.right_loc_embedding_layer(right_loc_squares)
-
+        
         mask = mask.permute(0, 3, 1, 2)
 
         #
@@ -130,14 +122,13 @@ class BaseGenerator(nn.Module):
         out = out.transpose(0, 1)
 
         #
-        if self.disable_edgelogit:
-            logits = self.generator(out)
-        else:
-            logits0 = self.generator(out)
-            logits1 = self.ring_generator(out, sequences)
-            logits = torch.cat([logits0, logits1], dim=2)
-
-        logits = logits.masked_fill(pred_masks, float("-inf"))
+        logits0 = self.generator(out)
+        logits1 = self.ring_generator(out, sequences)
+        logits = torch.cat([logits0, logits1], dim=2)
+        logits = logits.masked_fill(graph_mask_sequences, float("-inf"))
+        
+        if not self.disable_valencemask:
+            logits = logits.masked_fill(valence_mask_sequences, float("-inf"))
 
         return logits
 
@@ -150,7 +141,7 @@ class BaseGenerator(nn.Module):
             data.update(id)
             return data
 
-        for _ in range(max_len):
+        for idx in range(max_len):
             if len(data_list) == 0:
                 break
 
@@ -165,5 +156,10 @@ class BaseGenerator(nn.Module):
             ended_data_list += [data for data in data_list if data.ended]
             data_list = [data for data in data_list if not data.ended]
 
+            if idx == max_len-1:
+                for data in data_list:
+                    data.error = "incomplete"
+        
         data_list = data_list + ended_data_list
+
         return data_list
